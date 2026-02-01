@@ -8,9 +8,9 @@ import { gsFetch } from '../utils/google';
 import { formatKRW, parseAmount } from '../utils/format';
 import { compressImage } from '../utils/dataUrl';
 import Card from './Card';
-import useLocalStorageState from '../hooks/useLocalStorageState';
+import { useLocalStorageState } from '../hooks/useLocalStorageState';
 
-import { SHEET_ID, ATTENDANCE_SHEET_GID, MEMBERS_SHEET_INDEX } from '../constants';
+import { ATTENDANCE_SHEET_GID, MEMBERS_SHEET_INDEX } from '../constants';
 import { useConfig } from '../context/ConfigContext';
 
 export default function Attendance({ gsCfg, onJumpToTab, initialMembers = [], initialAttendanceData = { headers: [], records: [] }, onRefreshAttendance, onAttendanceUpdate }) {
