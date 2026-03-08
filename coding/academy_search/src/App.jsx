@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import DetailView from './components/DetailView';
 import Login from './components/Login';
-import { fetchGoogleSheetData, transformAcademyData, fetchSheetName, DATA_GID } from './utils/googleSheets';
+import { fetchGoogleSheetData, transformAcademyData, fetchSheetName, fetchInspectionData, fetch2026InspectionData, fetchInstructorData, DATA_GID } from './utils/googleSheets';
 import './App.css';
+import InspectionStandardAccordion from './components/InspectionStandardAccordion';
+import InspectionPage from './components/InspectionPage';
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -17,6 +19,7 @@ function App() {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [dataAsOf, setDataAsOf] = useState(''); // 데이터 기준일
   const [showLegalResources, setShowLegalResources] = useState(false); // 법령 자료 표시 여부
+  const [showInspection, setShowInspection] = useState(false); // 지도점검 화면
 
   // Clean up any old auth data on mount
   useEffect(() => {
@@ -35,13 +38,43 @@ function App() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [rawData, sheetName] = await Promise.all([
+      const [rawData, sheetName, inspectionMap, map2026, instructorMap] = await Promise.all([
         fetchGoogleSheetData(DATA_GID),
-        fetchSheetName()
+        fetchSheetName(),
+        fetchInspectionData(),
+        fetch2026InspectionData(),
+        fetchInstructorData()
       ]);
-      const transformed = transformAcademyData(rawData);
+      const transformed = transformAcademyData(rawData, inspectionMap);
+
+      // 2026년 점검 + 강사 데이터 병합
+      transformed.forEach(academy => {
+        const normName = academy.name.replace(/[^a-zA-Z0-9가-힣]/g, '').toLowerCase();
+
+        // 2026 점검 병합
+        const records2026 = map2026.get(normName) || [];
+        if (records2026.length > 0) {
+          const existingDates = new Set(academy.inspections.map(r => r.date));
+          const newRecords = records2026.filter(r => !existingDates.has(r.date));
+          academy.inspections = [...academy.inspections, ...newRecords].sort((a, b) => {
+            const toDate = str => {
+              if (!str) return new Date(0);
+              const d = new Date(str.replace(/\./g, '-'));
+              return isNaN(d.getTime()) ? new Date(0) : d;
+            };
+            return toDate(b.date) - toDate(a.date);
+          });
+        }
+
+        // 강사 데이터 병합 (등록번호 우선, 없으면 학원명 fallback)
+        const instructors = instructorMap.get(academy.id)
+          || instructorMap.get(normName)
+          || [];
+        academy.instructors = instructors;
+      });
+
       setAcademies(transformed);
-      setDataAsOf(sheetName); // 항상 값이 있음 (폴백 포함)
+      setDataAsOf(sheetName);
     } catch (err) {
       console.error(err);
       setError('데이터를 불러오는데 실패했습니다.');
@@ -289,6 +322,20 @@ function App() {
 
   const displayList = hasSearched ? performSearch(searchQuery) : [];
 
+  // 지도점검 화면
+  if (showInspection) {
+    return (
+      <InspectionPage
+        onBack={() => setShowInspection(false)}
+        academies={academies}
+        onSelectAcademy={(academy) => {
+          setShowInspection(false);
+          setSelectedAcademy(academy);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="container">
       {selectedAcademy && (
@@ -458,7 +505,9 @@ function App() {
               onClick={() => setSelectedAcademy(academy)}
             >
               <div className="card-top">
-                <span className="academy-id" style={{ color: 'var(--text-muted)' }}>No. {academy.id}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span className="academy-id" style={{ color: 'var(--text-muted)' }}>No. {academy.id}</span>
+                </div>
                 <span className="academy-category">{academy.category}</span>
               </div>
               <h3 className="academy-name">{academy.name}</h3>
@@ -1152,6 +1201,79 @@ function App() {
                 </div>
               </div>
             )}
+          </div>
+
+          {/* 행정처분/과태료 1차 적발 기준 아코디언 */}
+          <div style={{ marginTop: '16px' }}>
+            <InspectionStandardAccordion />
+          </div>
+
+          {/* 지도점검 버튼 */}
+          <div
+            onClick={() => setShowInspection(true)}
+            style={{
+              marginTop: '24px',
+              padding: '16px 20px',
+              background: '#ffffff',
+              border: '2px solid #e2e8f0',
+              borderRadius: '16px',
+              cursor: 'pointer',
+              transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)',
+              position: 'relative',
+              overflow: 'hidden'
+            }}
+            onMouseOver={(e) => {
+              e.currentTarget.style.borderColor = '#3b82f6';
+              e.currentTarget.style.boxShadow = '0 10px 15px -3px rgba(59, 130, 246, 0.1)';
+              e.currentTarget.style.transform = 'translateY(-2px)';
+            }}
+            onMouseOut={(e) => {
+              e.currentTarget.style.borderColor = '#e2e8f0';
+              e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.05)';
+              e.currentTarget.style.transform = 'translateY(0)';
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', position: 'relative', zIndex: 1 }}>
+              <div style={{
+                width: '44px',
+                height: '44px',
+                borderRadius: '12px',
+                background: '#eff6ff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '1.4rem'
+              }}>
+                📊
+              </div>
+              <div>
+                <div style={{ fontSize: '1.05rem', fontWeight: '800', color: '#1e293b' }}>
+                  지도점검 업무관리
+                </div>
+                <div style={{ fontSize: '0.82rem', color: '#64748b', marginTop: '3px', fontWeight: '500' }}>
+                  하남지역 지도점검 현황 및 통계 확인
+                </div>
+              </div>
+            </div>
+            <div style={{
+              width: '32px',
+              height: '32px',
+              borderRadius: '8px',
+              background: '#f8fafc',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              position: 'relative',
+              zIndex: 1
+            }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9 18 15 12 9 6"></polyline>
+              </svg>
+            </div>
           </div>
         </div>
       )}
