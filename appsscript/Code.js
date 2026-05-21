@@ -776,9 +776,11 @@ const _Edit = {
     let serial   = 0;
     const keyMap = new Map();
     const serials = vals.map(row => {
-      const dv   = row[C_.COL.시작일 - 1];
-      const name = String(row[C_.COL.명칭 - 1] || '').trim();
+      const dv       = row[C_.COL.시작일 - 1];
+      const name     = String(row[C_.COL.명칭 - 1] || '').trim();
+      const schedule = String(row[C_.COL.예약일정 - 1] || '').trim();
       if (!(dv instanceof Date) || isNaN(dv.getTime())) return null;
+      if (schedule.includes('자율점검대상')) return null;
       const dk  = `${dv.getFullYear()}-${dv.getMonth()}-${dv.getDate()}`;
       const key = name ? `${dk}|${name}` : `${dk}|__noname__${serial}`;
       if (!keyMap.has(key)) { serial++; keyMap.set(key, serial); }
@@ -1019,13 +1021,15 @@ const _Style = {
     const totalCols = _styleCols(sh);
 
     if (!serials) {
-      const vals = sh.getRange(start, 1, n, 5).getValues();
+      const vals = sh.getRange(start, 1, n, C_.COL.예약일정).getValues();
       let serial  = 0;
       const keyMap = new Map();
       serials = vals.map(row => {
-        const dv   = row[C_.COL.시작일 - 1];
-        const name = String(row[C_.COL.명칭 - 1] || '').trim();
+        const dv       = row[C_.COL.시작일 - 1];
+        const name     = String(row[C_.COL.명칭 - 1] || '').trim();
+        const schedule = String(row[C_.COL.예약일정 - 1] || '').trim();
         if (!(dv instanceof Date) || isNaN(dv.getTime())) return null;
+        if (schedule.includes('자율점검대상')) return null;
         const dk  = `${dv.getFullYear()}-${dv.getMonth()}-${dv.getDate()}`;
         const key = name ? `${dk}|${name}` : `${dk}|__noname__${serial}`;
         if (!keyMap.has(key)) { serial++; keyMap.set(key, serial); }
