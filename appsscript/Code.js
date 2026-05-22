@@ -447,7 +447,10 @@ function sortAndApplyStyle() {
   // (정렬 로직 내부에서 _Style.applyAll()이 자동으로 함께 호출됩니다)
   _Sort.sortAll(sh, false);
 
-  // 2. 열 너비 및 행 높이 규격 강제 적용
+  // 2. 네이버플레이스 링크 일괄 적용
+  _applyNaverLinks_(sh);
+
+  // 3. 열 너비 및 행 높이 규격 강제 적용
   _applyColWidths(sh);
   sh.setRowHeights(start, n, 37);
   SpreadsheetApp.flush();
@@ -461,6 +464,11 @@ function sortAndApplyStyle() {
 // ═══════════════════════════════════════════════════════
 function applyNaverPlaceLinks() {
   const sh    = _U.sh(C_.SHEET.MAIN);
+  const count = _applyNaverLinks_(sh);
+  _U.toast(`네이버플레이스 링크 ${count}건 적용 완료`, '✅', 4);
+}
+
+function _applyNaverLinks_(sh) {
   const C     = C_.COL;
   const start = C_.START_ROW;
   const last  = Math.max(_U.lastDataRow(sh), start);
@@ -481,7 +489,7 @@ function applyNaverPlaceLinks() {
     count++;
   }
   SpreadsheetApp.flush();
-  _U.toast(`네이버플레이스 링크 ${count}건 적용 완료`, '✅', 4);
+  return count;
 }
 
 
@@ -611,8 +619,6 @@ function onOpen() {
     .addItem('📊 학원,교습소,개인과외 통계 생성', 'buildCombinedStatSheet')
     .addSeparator()
     .addItem('🔄 점검이력 인덱스 갱신', 'rebuildHistoryIndex')
-    .addSeparator()
-    .addItem('🗺️ G열 네이버플레이스 링크 일괄 적용', 'applyNaverPlaceLinks')
     .addToUi();
 
   try { _applyColumnLayout(_U.sh(C_.SHEET.MAIN)); } catch (_) {}
