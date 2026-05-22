@@ -457,6 +457,35 @@ function sortAndApplyStyle() {
 }
 
 // ═══════════════════════════════════════════════════════
+// ★ 공개 함수 — applyNaverPlaceLinks (G열 일괄 링크 적용)
+// ═══════════════════════════════════════════════════════
+function applyNaverPlaceLinks() {
+  const sh    = _U.sh(C_.SHEET.MAIN);
+  const C     = C_.COL;
+  const start = C_.START_ROW;
+  const last  = Math.max(_U.lastDataRow(sh), start);
+  const n     = last - start + 1;
+
+  const names = sh.getRange(start, C.명칭, n, 1).getDisplayValues().flat();
+  const addrs = sh.getRange(start, C.주소, n, 1).getDisplayValues().flat();
+
+  let count = 0;
+  for (let i = 0; i < n; i++) {
+    const name = String(names[i] || '').trim();
+    const addr = String(addrs[i] || '').trim();
+    if (!name || !addr) continue;
+
+    const url  = 'https://map.naver.com/p/search/' + encodeURIComponent(name + ' 하남시') + '?c=15.00,0,0,0,dh';
+    const rich = SpreadsheetApp.newRichTextValue().setText(addr).setLinkUrl(url).build();
+    sh.getRange(start + i, C.주소).setRichTextValue(rich);
+    count++;
+  }
+  SpreadsheetApp.flush();
+  _U.toast(`네이버플레이스 링크 ${count}건 적용 완료`, '✅', 4);
+}
+
+
+// ═══════════════════════════════════════════════════════
 // 트리거 핸들러
 // ═══════════════════════════════════════════════════════
 function onEdit_지도점검대장(e) {
@@ -582,6 +611,8 @@ function onOpen() {
     .addItem('📊 학원,교습소,개인과외 통계 생성', 'buildCombinedStatSheet')
     .addSeparator()
     .addItem('🔄 점검이력 인덱스 갱신', 'rebuildHistoryIndex')
+    .addSeparator()
+    .addItem('🗺️ G열 네이버플레이스 링크 일괄 적용', 'applyNaverPlaceLinks')
     .addToUi();
 
   try { _applyColumnLayout(_U.sh(C_.SHEET.MAIN)); } catch (_) {}
@@ -827,7 +858,9 @@ const _Edit = {
       const dateVal     = sh.getRange(row, C.시작일).getValue();
       const isFirst     = !_U.hasSameGroupAbove(sh, row, dateVal, name);
 
-      sh.getRange(row, C.주소).setValue(trimmedAddr);
+      const naverUrl = 'https://map.naver.com/p/search/' + encodeURIComponent(name + ' 하남시') + '?c=15.00,0,0,0,dh';
+      const addrRich = SpreadsheetApp.newRichTextValue().setText(trimmedAddr).setLinkUrl(naverUrl).build();
+      sh.getRange(row, C.주소).setRichTextValue(addrRich);
 
       if (isFirst) {
         sh.getRange(row, C.등록번호).setValue(info.regno || '');
@@ -1616,7 +1649,7 @@ const _Sort = {
 
     const values = sh.getRange(start, 1, n, cols).getValues();
 
-    const richCols = [C.명칭, C.이력];
+    const richCols = [C.명칭, C.이력, C.주소];
     const richData = {};
     richCols.forEach(c => {
       richData[c] = sh.getRange(start, c, n, 1).getRichTextValues();
