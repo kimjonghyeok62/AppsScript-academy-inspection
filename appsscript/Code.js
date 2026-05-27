@@ -831,14 +831,14 @@ const _Edit = {
 
       if (isFirst) {
         sh.getRange(row, C.등록번호).setValue(info.regno || '');
-        sh.getRange(row, C.주소동).setValue(dong);
+        if (dong) sh.getRange(row, C.주소동).setValue(dong);
       } else {
         sh.getRange(row, C.등록번호).setValue(info.regno || '').setFontColor(DIM);
-        sh.getRange(row, C.주소동).setValue(dong || '').setFontColor(DIM);
+        if (dong) sh.getRange(row, C.주소동).setValue(dong).setFontColor(DIM);
       }
 
-      sh.getRange(row, C.운영자).setValue(info.owner);
-      sh.getRange(row, C.연락처).setValue(info.phone);
+      if (info.owner) sh.getRange(row, C.운영자).setValue(info.owner);
+      if (info.phone) sh.getRange(row, C.연락처).setValue(info.phone);
     } else {
       sh.getRange(row, C.등록번호, 1, 6).clearContent();
     }
@@ -2126,23 +2126,31 @@ function batchFillByName() {
     if (tipo) lastType = tipo;
     if (!name || tipo === '개인과외') continue;
 
-    const isMissing = !regnoVals[i].trim()
-                   || !addrVals[i].trim()
-                   || !dongVals[i].trim()
-                   || !ownerVals[i].trim()
-                   || !phoneVals[i].trim();
+    const isMissing = !regnoVals[i].trim() || !addrVals[i].trim();
     if (!isMissing) continue;
 
     targets.push({ rowIdx: i, row: start + i, name, type: tipo });
   }
 
   const ui  = SpreadsheetApp.getUi();
+  const targetLines = targets.slice(0, 15).map(t => {
+    const missing = [];
+    const i = t.rowIdx;
+    if (!regnoVals[i].trim()) missing.push('등록번호');
+    if (!addrVals[i].trim())  missing.push('주소');
+    if (!ownerVals[i].trim()) missing.push('운영자');
+    if (!phoneVals[i].trim()) missing.push('연락처');
+    return `    [시트 ${t.row}행] "${t.name}" (${t.type}) — 누락: ${missing.join(', ') || '없음'}`;
+  });
   const res = ui.alert(
     '🔍 명칭 검색 확인',
     [
       `명칭을 기준으로 정보를 자동으로 채웁니다. (초고속 모드)`,
       ``,
       `  • 처리 대상: ${targets.length}행`,
+      ``,
+      ...targetLines,
+      ``,
       `계속하시겠습니까?`,
     ].join('\n'),
     ui.ButtonSet.YES_NO
@@ -2183,14 +2191,14 @@ function batchFillByName() {
 
     if (isFirst) {
       sh.getRange(t.row, C.등록번호).setValue(info.regno || '');
-      sh.getRange(t.row, C.주소동).setValue(dong);
+      if (dong) sh.getRange(t.row, C.주소동).setValue(dong);
     } else {
       sh.getRange(t.row, C.등록번호).setValue(info.regno || '').setFontColor(DIM);
-      sh.getRange(t.row, C.주소동).setValue(dong || '').setFontColor(DIM);
+      if (dong) sh.getRange(t.row, C.주소동).setValue(dong).setFontColor(DIM);
     }
 
-    sh.getRange(t.row, C.운영자).setValue(info.owner);
-    sh.getRange(t.row, C.연락처).setValue(info.phone);
+    if (info.owner) sh.getRange(t.row, C.운영자).setValue(info.owner);
+    if (info.phone) sh.getRange(t.row, C.연락처).setValue(info.phone);
 
     const refDateRaw = (dateVal instanceof Date && !isNaN(dateVal.getTime())) ? dateVal : new Date();
     const refTime    = new Date(refDateRaw.getFullYear(), refDateRaw.getMonth(), refDateRaw.getDate()).getTime();
