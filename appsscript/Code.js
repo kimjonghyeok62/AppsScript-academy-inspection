@@ -580,7 +580,6 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('📋 지도점검')
     .addItem('🔍 명칭 검색 (정보 자동 채우기)', 'batchFillByName')
-    .addItem('🔗 주소 네이버 링크 일괄 적용', 'applyNaverLinksToAll')
     .addItem('🎨 지금 바로 재정렬 및 스타일 적용', 'sortAndApplyStyle')
     .addItem('📅 캘린더 일정 반영', 'syncCalendar')
     .addItem('📊 학원,교습소,개인과외 통계 생성', 'buildCombinedStatSheet')
@@ -830,8 +829,10 @@ const _Edit = {
       const trimmedAddr = _U.trimHanamAddr(info.addr);
       const dateVal     = sh.getRange(row, C.시작일).getValue();
       const isFirst     = !_U.hasSameGroupAbove(sh, row, dateVal, name);
+      const bgColor     = sh.getRange(row, C.주소).getBackground();
+      const textColor   = isFirst ? '#000000' : bgColor;
 
-      sh.getRange(row, C.주소).setRichTextValue(_U.naverAddrRichText(trimmedAddr, name));
+      sh.getRange(row, C.주소).setRichTextValue(_U.naverAddrRichText(trimmedAddr, name, type, textColor));
 
       if (isFirst) {
         sh.getRange(row, C.등록번호).setValue(info.regno || '');
@@ -2093,13 +2094,24 @@ const _U = {
   },
 
   // 주소 텍스트에 네이버 플레이스 검색 URL을 붙인 RichTextValue 반환
-  naverAddrRichText(addrText, academyName) {
-    const url = 'https://map.naver.com/p/search/' +
-      encodeURIComponent((academyName || addrText) + ' 경기도 하남시');
-    return SpreadsheetApp.newRichTextValue()
+  naverAddrRichText(addrText, academyName, gubun, textColor) {
+    let searchName = (academyName || addrText).trim();
+    let suffix;
+    if (gubun && gubun.includes('교습소')) {
+      searchName = searchName.replace(/교습소$/, '').trim();
+      suffix = ' 하남시';
+    } else {
+      suffix = ' 경기도 하남시';
+    }
+    const url = 'https://map.naver.com/p/search/' + encodeURIComponent(searchName + suffix);
+    const builder = SpreadsheetApp.newRichTextValue()
       .setText(addrText)
-      .setLinkUrl(url)
-      .build();
+      .setLinkUrl(url);
+    if (textColor) {
+      builder.setTextStyle(0, addrText.length,
+        SpreadsheetApp.newTextStyle().setForegroundColor(textColor).build());
+    }
+    return builder.build();
   },
 
   toast(msg, title, sec) {
@@ -2126,6 +2138,7 @@ function batchFillByName() {
   const nameVals  = sh.getRange(start, C.명칭,     n, 1).getDisplayValues().flat();
   const typeVals  = sh.getRange(start, C.구분,     n, 1).getDisplayValues().flat();
   const dateVals  = sh.getRange(start, C.시작일,   n, 1).getValues().flat();
+  const bgColors  = sh.getRange(start, C.주소,     n, 1).getBackgrounds().flat();
   const regnoVals = sh.getRange(start, C.등록번호, n, 1).getDisplayValues().flat();
   const addrVals  = sh.getRange(start, C.주소,     n, 1).getDisplayValues().flat();
   const dongVals  = sh.getRange(start, C.주소동,   n, 1).getDisplayValues().flat();
@@ -2200,8 +2213,9 @@ function batchFillByName() {
     const isFirst     = !_U.hasSameGroupAbove(sh, t.row, dateVal, t.name);
     const dong        = _U.extractDong(info.addr);
     const trimmedAddr = _U.trimHanamAddr(info.addr);
+    const textColor   = isFirst ? '#000000' : bgColors[t.rowIdx];
 
-    sh.getRange(t.row, C.주소).setRichTextValue(_U.naverAddrRichText(trimmedAddr, t.name));
+    sh.getRange(t.row, C.주소).setRichTextValue(_U.naverAddrRichText(trimmedAddr, t.name, t.type, textColor));
 
     if (isFirst) {
       sh.getRange(t.row, C.등록번호).setValue(info.regno || '');
@@ -2376,14 +2390,25 @@ function applyNaverLinksToAll() {
   const C = C_.COL;
   const n = last - start + 1;
 
-  const nameVals = sh.getRange(start, C.명칭, n, 1).getDisplayValues();
-  const addrVals = sh.getRange(start, C.주소,  n, 1).getDisplayValues();
+  const nameVals  = sh.getRange(start, C.명칭,   n, 1).getDisplayValues();
+  const addrVals  = sh.getRange(start, C.주소,   n, 1).getDisplayValues();
+  const gubunVals = sh.getRange(start, C.구분,   n, 1).getDisplayValues();
+  const dateVals  = sh.getRange(start, C.시작일, n, 1).getValues();
+  const bgColors  = sh.getRange(start, C.주소,   n, 1).getBackgrounds();
 
+  const seenKeys = new Set();
   const richValues = addrVals.map((row, i) => {
-    const addr = String(row[0] || '').trim();
-    const name = String(nameVals[i][0] || '').trim();
+    const addr  = String(row[0] || '').trim();
+    const name  = String(nameVals[i][0] || '').trim();
+    const gubun = String(gubunVals[i][0] || '').trim();
+    const d     = dateVals[i][0];
+    const dk    = (d instanceof Date && !isNaN(d.getTime()) && name)
+      ? `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}|${name}` : null;
+    const isFirst = !dk || !seenKeys.has(dk);
+    if (dk) seenKeys.add(dk);
     if (!addr) return [SpreadsheetApp.newRichTextValue().setText('').build()];
-    return [_U.naverAddrRichText(addr, name || addr)];
+    const textColor = isFirst ? '#000000' : bgColors[i][0];
+    return [_U.naverAddrRichText(addr, name || addr, gubun, textColor)];
   });
 
   sh.getRange(start, C.주소, n, 1).setRichTextValues(richValues);
