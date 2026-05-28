@@ -577,6 +577,7 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('📋 지도점검')
     .addItem('🔍 명칭 검색 (정보 자동 채우기)', 'batchFillByName')
+    .addItem('🔗 주소 네이버 링크 일괄 적용', 'applyNaverLinksToAll')
     .addItem('🎨 지금 바로 재정렬 및 스타일 적용', 'sortAndApplyStyle')
     .addItem('📅 캘린더 일정 반영', 'syncCalendar')
     .addItem('📊 학원,교습소,개인과외 통계 생성', 'buildCombinedStatSheet')
@@ -2357,4 +2358,31 @@ function _batchLoadAllFallback() {
     console.warn('폴백 시트 로드 실패:', e);
   }
   return map;
+}
+
+
+// ═══════════════════════════════════════════════════════
+// ★ 공개 함수 — G열 주소 전체에 네이버 플레이스 링크 일괄 적용
+// ═══════════════════════════════════════════════════════
+function applyNaverLinksToAll() {
+  const sh    = _U.sh(C_.SHEET.MAIN);
+  const start = C_.START_ROW;
+  const last  = _U.lastDataRow(sh);
+  if (last < start) { _U.toast('데이터가 없습니다.', '⚠️', 3); return; }
+
+  const C = C_.COL;
+  const n = last - start + 1;
+
+  const nameVals = sh.getRange(start, C.명칭, n, 1).getDisplayValues();
+  const addrVals = sh.getRange(start, C.주소,  n, 1).getDisplayValues();
+
+  const richValues = addrVals.map((row, i) => {
+    const addr = String(row[0] || '').trim();
+    const name = String(nameVals[i][0] || '').trim();
+    if (!addr) return [SpreadsheetApp.newRichTextValue().setText('').build()];
+    return [_U.naverAddrRichText(addr, name || addr)];
+  });
+
+  sh.getRange(start, C.주소, n, 1).setRichTextValues(richValues);
+  _U.toast(`${n}행 주소 링크 적용 완료`, '🔗 네이버 링크', 4);
 }
