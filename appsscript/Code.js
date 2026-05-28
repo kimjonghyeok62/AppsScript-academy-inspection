@@ -447,7 +447,10 @@ function sortAndApplyStyle() {
   // (정렬 로직 내부에서 _Style.applyAll()이 자동으로 함께 호출됩니다)
   _Sort.sortAll(sh, false);
 
-  // 2. 열 너비 및 행 높이 규격 강제 적용
+  // 2. G열 주소 네이버 플레이스 링크 일괄 적용
+  applyNaverLinksToAll();
+
+  // 3. 열 너비 및 행 높이 규격 강제 적용
   _applyColWidths(sh);
   sh.setRowHeights(start, n, 37);
   SpreadsheetApp.flush();
