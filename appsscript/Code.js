@@ -827,7 +827,7 @@ const _Edit = {
       const dateVal     = sh.getRange(row, C.시작일).getValue();
       const isFirst     = !_U.hasSameGroupAbove(sh, row, dateVal, name);
 
-      sh.getRange(row, C.주소).setValue(trimmedAddr);
+      sh.getRange(row, C.주소).setRichTextValue(_U.naverAddrRichText(trimmedAddr, name));
 
       if (isFirst) {
         sh.getRange(row, C.등록번호).setValue(info.regno || '');
@@ -1616,7 +1616,7 @@ const _Sort = {
 
     const values = sh.getRange(start, 1, n, cols).getValues();
 
-    const richCols = [C.명칭, C.이력];
+    const richCols = [C.명칭, C.이력, C.주소];
     const richData = {};
     richCols.forEach(c => {
       richData[c] = sh.getRange(start, c, n, 1).getRichTextValues();
@@ -2088,6 +2088,16 @@ const _U = {
     return String(addr || '').replace(/경기도\s*하남시\s*/g, '').trim();
   },
 
+  // 주소 텍스트에 네이버 플레이스 검색 URL을 붙인 RichTextValue 반환
+  naverAddrRichText(addrText, academyName) {
+    const url = 'https://map.naver.com/p/search/' +
+      encodeURIComponent((academyName || addrText) + ' 경기도 하남시');
+    return SpreadsheetApp.newRichTextValue()
+      .setText(addrText)
+      .setLinkUrl(url)
+      .build();
+  },
+
   toast(msg, title, sec) {
     SpreadsheetApp.getActive().toast(msg, title || 'OK', sec || 5);
   },
@@ -2187,7 +2197,7 @@ function batchFillByName() {
     const dong        = _U.extractDong(info.addr);
     const trimmedAddr = _U.trimHanamAddr(info.addr);
 
-    sh.getRange(t.row, C.주소).setValue(trimmedAddr);
+    sh.getRange(t.row, C.주소).setRichTextValue(_U.naverAddrRichText(trimmedAddr, t.name));
 
     if (isFirst) {
       sh.getRange(t.row, C.등록번호).setValue(info.regno || '');
