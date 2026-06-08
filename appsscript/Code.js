@@ -2414,3 +2414,131 @@ function applyNaverLinksToAll() {
   sh.getRange(start, C.주소, n, 1).setRichTextValues(richValues);
   _U.toast(`${n}행 주소 링크 적용 완료`, '🔗 네이버 링크', 4);
 }
+
+// ═══════════════════════════════════════════════════════
+// 웹앱 핸들러 (웹 배포용)
+// ═══════════════════════════════════════════════════════
+
+function doGet(e) {
+  const action = (e && e.parameter && e.parameter.action) || '';
+
+  if (action === 'updateGuidanceContent') {
+    return _webUpdateGuidanceContent(e.parameter);
+  }
+
+  if (action === 'saveRouteOrder') {
+    return _webSaveRouteOrder(e.parameter);
+  }
+
+  if (action === 'getRouteOrder') {
+    return _webGetRouteOrder(e.parameter);
+  }
+
+  return ContentService
+    .createTextOutput(JSON.stringify({ ok: false, error: 'unknown action: ' + action }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// 지도내용(M열) 업데이트: 날짜 + 학원명으로 행을 찾아 값을 씀
+function _webUpdateGuidanceContent(params) {
+  const date  = (params.date  || '').trim();
+  const name  = (params.name  || '').trim();
+  const value = (params.value || '').trim();
+
+  try {
+    const ss = SpreadsheetApp.openById('1zSGd9TBcJRculSJzUoZ2N8bB2iENuCI0x9KBpyfXMUo');
+    let sheet = null;
+    const sheets = ss.getSheets();
+    for (let si = 0; si < sheets.length; si++) {
+      if (sheets[si].getSheetId() === 1946422008) { sheet = sheets[si]; break; }
+    }
+    if (!sheet) throw new Error('시트를 찾을 수 없음 (gid=1946422008)');
+
+    const data = sheet.getDataRange().getValues();
+
+    // 값이 가장 많이 채워진 행을 헤더로 자동 감지
+    let headerIdx = 0, maxFilled = 0;
+    for (let i = 0; i < Math.min(5, data.length); i++) {
+      const filled = data[i].filter(c => c !== '' && c !== null && c !== undefined).length;
+      if (filled > maxFilled) { maxFilled = filled; headerIdx = i; }
+    }
+    const headers = data[headerIdx].map(h => String(h).trim());
+
+    // 필요한 열 인덱스 찾기
+    let dateColIdx = -1, nameColIdx = -1, guidanceColIdx = -1;
+    headers.forEach((h, idx) => {
+      if (dateColIdx     < 0 && ['점검일','점검일자','지도점검일'].some(k => h.includes(k)))            dateColIdx     = idx;
+      if (nameColIdx     < 0 && ['명칭','학원명','학원(교습소)명','기관명'].some(k => h === k))         nameColIdx     = idx;
+      if (guidanceColIdx < 0 && ['지도내용','현장의견 및 지도내용','현장의견및지도내용','지도사항'].some(k => h.includes(k))) guidanceColIdx = idx;
+    });
+
+    if (guidanceColIdx < 0) throw new Error('지도내용 열을 찾을 수 없음. 헤더: ' + headers.join(','));
+    if (nameColIdx     < 0) throw new Error('명칭 열을 찾을 수 없음');
+
+    // 날짜·이름 정규화 (숫자만 추출해서 비교)
+    const nd = d => String(d instanceof Date
+      ? `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`
+      : d).replace(/[-.\s\/년월일]/g, '');
+    const nn = n => String(n).replace(/\s/g, '');
+
+    const targetDate = nd(date);
+    const targetName = nn(name);
+
+    let foundRow = -1;
+    for (let r = headerIdx + 1; r < data.length; r++) {
+      const rowDate = dateColIdx >= 0 ? nd(data[r][dateColIdx]) : '';
+      const rowName = nn(String(data[r][nameColIdx] || ''));
+      if (rowDate === targetDate && rowName === targetName) {
+        foundRow = r;
+        break;
+      }
+    }
+
+    if (foundRow < 0) throw new Error(`행을 찾을 수 없음: [${date}] [${name}]`);
+
+    sheet.getRange(foundRow + 1, guidanceColIdx + 1).setValue(value);
+
+    return ContentService
+      .createTextOutput(JSON.stringify({ ok: true, row: foundRow + 1 }))
+      .setMimeType(ContentService.MimeType.JSON);
+
+  } catch (err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ ok: false, error: err.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// 점검경로 순서 저장 (기존 saveRouteOrder 웹앱 버전)
+function _webSaveRouteOrder(params) {
+  try {
+    const date  = params.date  || '';
+    const order = JSON.parse(params.order || '[]');
+    const cache = CacheService.getScriptCache();
+    cache.put('routeOrder_' + date, JSON.stringify(order), 86400);
+    return ContentService
+      .createTextOutput(JSON.stringify({ ok: true }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ ok: false, error: err.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// 점검경로 순서 조회 (기존 getRouteOrder 웹앱 버전)
+function _webGetRouteOrder(params) {
+  try {
+    const date  = params.date || '';
+    const cache = CacheService.getScriptCache();
+    const raw   = cache.get('routeOrder_' + date);
+    const order = raw ? JSON.parse(raw) : [];
+    return ContentService
+      .createTextOutput(JSON.stringify({ ok: true, order }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ ok: false, error: err.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
