@@ -30,6 +30,9 @@ const C_ = {
   TZ:        'Asia/Seoul',
   TTL:       86400,
 
+  FEE_SS_ID: '158ZNBb88raJ1kzBL3eFcgPZS9CGs5in0YtPtiPWfdic',
+  FEE_GID:   { 학원: 1863320151, 교습소: 1929773080 },
+
   COL: {
     연번:         1,   // A
     시작일:       2,   // B
@@ -585,6 +588,9 @@ function onOpen() {
     .addItem('📊 학원,교습소,개인과외 통계 생성', 'buildCombinedStatSheet')
     .addSeparator()
     .addItem('🔄 점검이력 인덱스 갱신', 'rebuildHistoryIndex')
+    .addSeparator()
+    .addItem('📞 교습비 링크 일괄 적용 (J열)', 'applyFeeLinksToAll')
+    .addItem('🔗 교습비 링크용 웹앱 URL 초기화', 'setupWebAppUrl')
     .addToUi();
 
   try { _applyColumnLayout(_U.sh(C_.SHEET.MAIN)); } catch (_) {}
@@ -843,7 +849,10 @@ const _Edit = {
       }
 
       if (info.owner) sh.getRange(row, C.운영자).setValue(info.owner);
-      if (info.phone) sh.getRange(row, C.연락처).setValue(info.phone);
+      if (info.phone) {
+        const wUrl = PropertiesService.getScriptProperties().getProperty('WEB_APP_URL') || '';
+        sh.getRange(row, C.연락처).setRichTextValue(_U.feeRichText(info.phone, name, type, wUrl));
+      }
     } else {
       sh.getRange(row, C.등록번호, 1, 6).clearContent();
     }
@@ -2114,6 +2123,19 @@ const _U = {
     return builder.build();
   },
 
+  // 전화번호 텍스트에 교습비 조회 URL을 붙인 RichTextValue 반환
+  feeRichText(phoneText, academyName, gubun, webAppUrl) {
+    const builder = SpreadsheetApp.newRichTextValue().setText(phoneText);
+    if (webAppUrl && !String(gubun).includes('개인과외')) {
+      const type = String(gubun).includes('교습소') ? '교습소' : '학원';
+      const url  = webAppUrl + '?action=getFees'
+        + '&name=' + encodeURIComponent(academyName)
+        + '&type=' + encodeURIComponent(type);
+      builder.setLinkUrl(url);
+    }
+    return builder.build();
+  },
+
   toast(msg, title, sec) {
     SpreadsheetApp.getActive().toast(msg, title || 'OK', sec || 5);
   },
@@ -2194,6 +2216,7 @@ function batchFillByName() {
   const fbMap       = _batchLoadAllFallback();
 
   const DIM         = C_.STYLE.DIM_COLOR;
+  const wUrl        = PropertiesService.getScriptProperties().getProperty('WEB_APP_URL') || '';
   let successCount  = 0;
   let failCount     = 0;
   const failNames   = [];
@@ -2226,7 +2249,7 @@ function batchFillByName() {
     }
 
     if (info.owner) sh.getRange(t.row, C.운영자).setValue(info.owner);
-    if (info.phone) sh.getRange(t.row, C.연락처).setValue(info.phone);
+    if (info.phone) sh.getRange(t.row, C.연락처).setRichTextValue(_U.feeRichText(info.phone, t.name, t.type, wUrl));
 
     const refDateRaw = (dateVal instanceof Date && !isNaN(dateVal.getTime())) ? dateVal : new Date();
     const refTime    = new Date(refDateRaw.getFullYear(), refDateRaw.getMonth(), refDateRaw.getDate()).getTime();
@@ -2416,6 +2439,52 @@ function applyNaverLinksToAll() {
 }
 
 // ═══════════════════════════════════════════════════════
+// ★ 공개 함수 — J열 연락처 전체에 교습비 링크 일괄 적용
+// ═══════════════════════════════════════════════════════
+function applyFeeLinksToAll() {
+  const wUrl = PropertiesService.getScriptProperties().getProperty('WEB_APP_URL') || '';
+  if (!wUrl) {
+    SpreadsheetApp.getUi().alert('웹앱 URL이 설정되지 않았습니다.\n메뉴 > 🔗 교습비 링크용 웹앱 URL 초기화를 먼저 실행하세요.');
+    return;
+  }
+
+  const sh    = _U.sh(C_.SHEET.MAIN);
+  const start = C_.START_ROW;
+  const last  = _U.lastDataRow(sh);
+  if (last < start) { _U.toast('데이터가 없습니다.', '⚠️', 3); return; }
+
+  const C = C_.COL;
+  const n = last - start + 1;
+
+  const nameVals  = sh.getRange(start, C.명칭,    n, 1).getDisplayValues();
+  const gubunVals = sh.getRange(start, C.구분,    n, 1).getDisplayValues();
+  const phoneVals = sh.getRange(start, C.연락처,  n, 1).getDisplayValues();
+
+  const richValues = phoneVals.map((row, i) => {
+    const phone = String(row[0] || '').trim();
+    const name  = String(nameVals[i][0] || '').trim();
+    const gubun = String(gubunVals[i][0] || '').trim();
+    return [_U.feeRichText(phone, name, gubun, wUrl)];
+  });
+
+  sh.getRange(start, C.연락처, n, 1).setRichTextValues(richValues);
+  _U.toast(`${n}행 교습비 링크 적용 완료`, '📞 교습비 링크', 4);
+}
+
+// ═══════════════════════════════════════════════════════
+// ★ 공개 함수 — 웹앱 URL 초기화 (1회 실행)
+// ═══════════════════════════════════════════════════════
+function setupWebAppUrl() {
+  const url = ScriptApp.getService().getUrl();
+  if (!url) {
+    SpreadsheetApp.getUi().alert('웹앱이 배포되지 않았습니다.\n구글 스크립트 편집기에서 배포 > 새 배포를 먼저 진행하세요.');
+    return;
+  }
+  PropertiesService.getScriptProperties().setProperty('WEB_APP_URL', url);
+  SpreadsheetApp.getUi().alert('저장 완료:\n' + url);
+}
+
+// ═══════════════════════════════════════════════════════
 // 웹앱 핸들러 (웹 배포용)
 // ═══════════════════════════════════════════════════════
 
@@ -2432,6 +2501,10 @@ function doGet(e) {
 
   if (action === 'getRouteOrder') {
     return _webGetRouteOrder(e.parameter);
+  }
+
+  if (action === 'getFees') {
+    return _webGetFees(e.parameter);
   }
 
   return ContentService
@@ -2541,4 +2614,98 @@ function _webGetRouteOrder(params) {
       .createTextOutput(JSON.stringify({ ok: false, error: err.message }))
       .setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+// 교습비 조회 페이지 반환
+function _webGetFees(params) {
+  const name = String(params.name || '').trim();
+  const type = String(params.type || '학원').trim();
+
+  try {
+    const isGyeupso = type === '교습소';
+    const gid       = C_.FEE_GID[isGyeupso ? '교습소' : '학원'];
+    const ss        = SpreadsheetApp.openById(C_.FEE_SS_ID);
+    const sheet     = ss.getSheets().find(s => s.getSheetId() === gid);
+    if (!sheet) throw new Error('교습비 시트를 찾을 수 없습니다 (gid=' + gid + ')');
+
+    const data    = sheet.getDataRange().getValues();
+    const normKey = _U.norm(name);
+
+    // B열(인덱스 1)로 학원명 매칭
+    const rows = data.filter(r => _U.norm(String(r[1] || '')) === normKey);
+
+    let tableHtml;
+    if (rows.length === 0) {
+      tableHtml = '<p class="none">등록된 교습비 정보가 없습니다.</p>';
+    } else if (isGyeupso) {
+      // 교습소: U(20)=교습과목(반), W(22)=교습기간(개월), X(23)=교습기간(일), Z(25)=교습비, AL(37)=총교습비
+      tableHtml = '<table><thead><tr>'
+        + '<th>교습과목(반)</th><th>교습기간</th><th>교습비</th><th>총교습비</th>'
+        + '</tr></thead><tbody>';
+      rows.forEach(r => {
+        const subj   = r[20] || '';
+        const mon    = r[22] !== '' && r[22] !== null ? r[22] + '개월' : '';
+        const day    = r[23] !== '' && r[23] !== null ? r[23] + '일' : '';
+        const period = [mon, day].filter(Boolean).join(' ') || '-';
+        const fee    = r[25] !== '' && r[25] !== null ? Number(r[25]).toLocaleString() + '원' : '-';
+        const total  = r[37] !== '' && r[37] !== null ? Number(r[37]).toLocaleString() + '원' : '-';
+        tableHtml += `<tr><td>${subj}</td><td>${period}</td><td>${fee}</td><td>${total}</td></tr>`;
+      });
+      tableHtml += '</tbody></table>';
+    } else {
+      // 학원: AF(31)=교습과목(반), AH(33)=교습기간, AJ(35)=교습비, AM(38)=총교습비
+      tableHtml = '<table><thead><tr>'
+        + '<th>교습과목(반)</th><th>교습기간</th><th>교습비</th><th>총교습비</th>'
+        + '</tr></thead><tbody>';
+      rows.forEach(r => {
+        const subj   = r[31] || '';
+        const period = r[33] || '-';
+        const fee    = r[35] !== '' && r[35] !== null ? Number(r[35]).toLocaleString() + '원' : '-';
+        const total  = r[38] !== '' && r[38] !== null ? Number(r[38]).toLocaleString() + '원' : '-';
+        tableHtml += `<tr><td>${subj}</td><td>${period}</td><td>${fee}</td><td>${total}</td></tr>`;
+      });
+      tableHtml += '</tbody></table>';
+    }
+
+    const html = `<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${_escHtml(name)} 교습비</title>
+<style>
+  body{font-family:'Noto Sans KR',sans-serif;padding:16px;max-width:640px;margin:0 auto;font-size:14px}
+  h2{font-size:1.1em;margin-bottom:12px}
+  .tag{display:inline-block;background:#e8f0fe;color:#1a73e8;border-radius:4px;padding:2px 8px;font-size:12px;margin-left:6px;vertical-align:middle}
+  table{border-collapse:collapse;width:100%;margin-top:8px}
+  th,td{border:1px solid #dadce0;padding:8px 10px;text-align:left}
+  th{background:#f8f9fa;font-weight:600;white-space:nowrap}
+  td{word-break:keep-all}
+  .none{color:#888;margin-top:16px}
+  @media(max-width:480px){th,td{padding:6px 7px;font-size:13px}}
+</style>
+</head>
+<body>
+<h2>${_escHtml(name)} <span class="tag">${_escHtml(type)}</span></h2>
+${tableHtml}
+</body>
+</html>`;
+
+    return HtmlService.createHtmlOutput(html)
+      .setTitle(name + ' 교습비')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+
+  } catch (err) {
+    return HtmlService.createHtmlOutput(
+      '<p style="color:red;padding:16px">오류: ' + _escHtml(err.message) + '</p>'
+    ).setTitle('오류');
+  }
+}
+
+function _escHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
