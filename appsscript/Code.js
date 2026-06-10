@@ -847,8 +847,7 @@ const _Edit = {
 
       if (info.owner) sh.getRange(row, C.운영자).setValue(info.owner);
       if (info.phone) {
-        const wUrl = PropertiesService.getScriptProperties().getProperty('WEB_APP_URL') || '';
-        sh.getRange(row, C.연락처).setRichTextValue(_U.feeRichText(info.phone, name, type, wUrl));
+        sh.getRange(row, C.연락처).setRichTextValue(_U.feeRichText(info.phone, name, type));
       }
     } else {
       sh.getRange(row, C.등록번호, 1, 6).clearContent();
@@ -1007,6 +1006,8 @@ const _Style = {
       const hideCols = C_.STYLE.GROUP_REPEAT_COLS;
       sh.getRange(start + gStart + 1, 1, groupSize - 1, hideCols)
         .setFontColor(bgColor);
+      // J열(연락처)은 RichText 링크라 setFontColor가 적용 안 되므로 별도 처리
+      _U.hideJColRichText(sh, start + gStart + 1, groupSize - 1, bgColor);
     }
 
     sh.getRange(start + gStart, 1, 1, totalCols)
@@ -1118,6 +1119,8 @@ const _Style = {
         const hideCols = C_.STYLE.GROUP_REPEAT_COLS; // 11 = A~K
         sh.getRange(firstRow + 1, 1, groupSize - 1, hideCols)
           .setFontColor(bgColor);
+        // J열(연락처)은 RichText 링크라 setFontColor가 적용 안 되므로 별도 처리
+        _U.hideJColRichText(sh, firstRow + 1, groupSize - 1, bgColor);
       }
 
       const borderColor = isDone ? ST.DONE_BORDER_COLOR : ST.BORDER_COLOR;
@@ -2121,16 +2124,32 @@ const _U = {
   },
 
   // 전화번호 텍스트에 교습비 조회 URL을 붙인 RichTextValue 반환
-  feeRichText(phoneText, academyName, gubun, webAppUrl) {
+  feeRichText(phoneText, academyName, gubun, _unused) {
     const builder = SpreadsheetApp.newRichTextValue().setText(phoneText);
-    if (webAppUrl && !String(gubun).includes('개인과외')) {
-      const type = String(gubun).includes('교습소') ? '교습소' : '학원';
-      const url  = webAppUrl + '?action=getFees'
-        + '&name=' + encodeURIComponent(academyName)
-        + '&type=' + encodeURIComponent(type);
+    if (!String(gubun).includes('개인과외')) {
+      const url = 'https://academy-search-lovat.vercel.app/'
+        + '?q=' + encodeURIComponent(academyName)
+        + '&tab=tuition';
       builder.setLinkUrl(url);
     }
     return builder.build();
+  },
+
+  // J열(연락처) RichText의 텍스트 색상을 bgColor로 설정해 시각적으로 숨김
+  hideJColRichText(sh, startRow, numRows, bgColor) {
+    const jCol = C_.COL.연락처;
+    const range = sh.getRange(startRow, jCol, numRows, 1);
+    const richValues = range.getRichTextValues();
+    const hidden = richValues.map(row => row.map(rt => {
+      const text = rt.getText();
+      if (!text) return SpreadsheetApp.newRichTextValue().setText('').build();
+      return SpreadsheetApp.newRichTextValue()
+        .setText(text)
+        .setTextStyle(0, text.length,
+          SpreadsheetApp.newTextStyle().setForegroundColor(bgColor).build())
+        .build();
+    }));
+    range.setRichTextValues(hidden);
   },
 
   toast(msg, title, sec) {
@@ -2213,7 +2232,6 @@ function batchFillByName() {
   const fbMap       = _batchLoadAllFallback();
 
   const DIM         = C_.STYLE.DIM_COLOR;
-  const wUrl        = PropertiesService.getScriptProperties().getProperty('WEB_APP_URL') || '';
   let successCount  = 0;
   let failCount     = 0;
   const failNames   = [];
@@ -2246,7 +2264,7 @@ function batchFillByName() {
     }
 
     if (info.owner) sh.getRange(t.row, C.운영자).setValue(info.owner);
-    if (info.phone) sh.getRange(t.row, C.연락처).setRichTextValue(_U.feeRichText(info.phone, t.name, t.type, wUrl));
+    if (info.phone) sh.getRange(t.row, C.연락처).setRichTextValue(_U.feeRichText(info.phone, t.name, t.type));
 
     const refDateRaw = (dateVal instanceof Date && !isNaN(dateVal.getTime())) ? dateVal : new Date();
     const refTime    = new Date(refDateRaw.getFullYear(), refDateRaw.getMonth(), refDateRaw.getDate()).getTime();
@@ -2439,12 +2457,6 @@ function applyNaverLinksToAll() {
 // ★ 공개 함수 — J열 연락처 전체에 교습비 링크 일괄 적용
 // ═══════════════════════════════════════════════════════
 function applyFeeLinksToAll() {
-  const wUrl = PropertiesService.getScriptProperties().getProperty('WEB_APP_URL') || '';
-  if (!wUrl) {
-    SpreadsheetApp.getUi().alert('웹앱 URL이 설정되지 않았습니다.\n메뉴 > 🔗 교습비 링크용 웹앱 URL 초기화를 먼저 실행하세요.');
-    return;
-  }
-
   const sh    = _U.sh(C_.SHEET.MAIN);
   const start = C_.START_ROW;
   const last  = _U.lastDataRow(sh);
@@ -2461,7 +2473,7 @@ function applyFeeLinksToAll() {
     const phone = String(row[0] || '').trim();
     const name  = String(nameVals[i][0] || '').trim();
     const gubun = String(gubunVals[i][0] || '').trim();
-    return [_U.feeRichText(phone, name, gubun, wUrl)];
+    return [_U.feeRichText(phone, name, gubun)];
   });
 
   sh.getRange(start, C.연락처, n, 1).setRichTextValues(richValues);
