@@ -2480,6 +2480,22 @@ function applyFeeLinksToAll(showToast) {
   });
 
   sh.getRange(start, C.연락처, n, 1).setRichTextValues(richValues);
+
+  // 그룹 반복 행 J열 재숨김 (연번 기준으로 2번째~ 행은 배경색과 같은 색으로)
+  const serialVals = sh.getRange(start, C.연번, n, 1).getValues().flat();
+  const bgColors   = sh.getRange(start, 1, n, 1).getBackgrounds().flat();
+  let gi = 0;
+  while (gi < n) {
+    const s = serialVals[gi];
+    if (!s) { gi++; continue; }
+    let gj = gi + 1;
+    while (gj < n && serialVals[gj] === s) gj++;
+    if (gj - gi > 1) {
+      _U.hideJColRichText(sh, start + gi + 1, gj - gi - 1, bgColors[gi]);
+    }
+    gi = gj;
+  }
+
   if (showToast !== false) _U.toast(`${n}행 교습비 링크 적용 완료`, '📞 교습비 링크', 4);
 }
 
