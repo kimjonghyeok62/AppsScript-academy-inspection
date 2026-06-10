@@ -2475,13 +2475,26 @@ function applyFeeLinksToAll() {
 // ★ 공개 함수 — 웹앱 URL 초기화 (1회 실행)
 // ═══════════════════════════════════════════════════════
 function setupWebAppUrl() {
-  const url = ScriptApp.getService().getUrl();
-  if (!url) {
-    SpreadsheetApp.getUi().alert('웹앱이 배포되지 않았습니다.\n구글 스크립트 편집기에서 배포 > 새 배포를 먼저 진행하세요.');
+  const ui   = SpreadsheetApp.getUi();
+  let   auto = '';
+  try { auto = ScriptApp.getService().getUrl() || ''; } catch (_) {}
+
+  const hint = auto.startsWith('https://script.google.com/macros/s/')
+    ? '자동 감지: ' + auto + '\n\n그대로 쓰려면 빈칸으로 OK를 누르세요.'
+    : '자동 감지 실패.\n스크립트 편집기 > 배포 > 배포 관리에서\n웹앱 URL을 복사해 붙여넣으세요.';
+
+  const res = ui.prompt('웹앱 URL 설정', hint + '\n\n웹앱 URL (https://script.google.com/macros/s/.../exec):', ui.ButtonSet.OK_CANCEL);
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+
+  const input = res.getResponseText().trim();
+  const url   = input || auto;
+
+  if (!url.startsWith('https://script.google.com/macros/s/')) {
+    ui.alert('올바른 웹앱 URL이 아닙니다.\nhttps://script.google.com/macros/s/... 형식이어야 합니다.\n\n입력값: ' + url);
     return;
   }
   PropertiesService.getScriptProperties().setProperty('WEB_APP_URL', url);
-  SpreadsheetApp.getUi().alert('저장 완료:\n' + url);
+  ui.alert('저장 완료:\n' + url);
 }
 
 // ═══════════════════════════════════════════════════════
