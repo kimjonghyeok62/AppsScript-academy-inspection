@@ -588,9 +588,6 @@ function onOpen() {
     .addItem('📊 학원,교습소,개인과외 통계 생성', 'buildCombinedStatSheet')
     .addSeparator()
     .addItem('🔄 점검이력 인덱스 갱신', 'rebuildHistoryIndex')
-    .addSeparator()
-    .addItem('📞 교습비 링크 일괄 적용 (J열)', 'applyFeeLinksToAll')
-    .addItem('🔗 교습비 링크용 웹앱 URL 초기화', 'setupWebAppUrl')
     .addToUi();
 
   try { _applyColumnLayout(_U.sh(C_.SHEET.MAIN)); } catch (_) {}
@@ -2642,6 +2639,7 @@ function _webGetFees(params) {
       tableHtml = '<table><thead><tr>'
         + '<th>교습과목(반)</th><th>교습기간</th><th>교습비</th><th>총교습비</th>'
         + '</tr></thead><tbody>';
+      const seenG = new Set();
       rows.forEach(r => {
         const subj   = r[20] || '';
         const mon    = r[22] !== '' && r[22] !== null ? r[22] + '개월' : '';
@@ -2649,7 +2647,10 @@ function _webGetFees(params) {
         const period = [mon, day].filter(Boolean).join(' ') || '-';
         const fee    = r[25] !== '' && r[25] !== null ? Number(r[25]).toLocaleString() + '원' : '-';
         const total  = r[37] !== '' && r[37] !== null ? Number(r[37]).toLocaleString() + '원' : '-';
-        tableHtml += `<tr><td>${subj}</td><td>${period}</td><td>${fee}</td><td>${total}</td></tr>`;
+        const key    = subj + '|' + period + '|' + fee + '|' + total;
+        const cls    = seenG.has(key) ? ' class="dup"' : '';
+        seenG.add(key);
+        tableHtml += `<tr${cls}><td>${subj}</td><td>${period}</td><td>${fee}</td><td>${total}</td></tr>`;
       });
       tableHtml += '</tbody></table>';
     } else {
@@ -2657,12 +2658,16 @@ function _webGetFees(params) {
       tableHtml = '<table><thead><tr>'
         + '<th>교습과목(반)</th><th>교습기간</th><th>교습비</th><th>총교습비</th>'
         + '</tr></thead><tbody>';
+      const seenH = new Set();
       rows.forEach(r => {
         const subj   = r[31] || '';
         const period = r[33] || '-';
         const fee    = r[35] !== '' && r[35] !== null ? Number(r[35]).toLocaleString() + '원' : '-';
         const total  = r[38] !== '' && r[38] !== null ? Number(r[38]).toLocaleString() + '원' : '-';
-        tableHtml += `<tr><td>${subj}</td><td>${period}</td><td>${fee}</td><td>${total}</td></tr>`;
+        const key    = subj + '|' + period + '|' + fee + '|' + total;
+        const cls    = seenH.has(key) ? ' class="dup"' : '';
+        seenH.add(key);
+        tableHtml += `<tr${cls}><td>${subj}</td><td>${period}</td><td>${fee}</td><td>${total}</td></tr>`;
       });
       tableHtml += '</tbody></table>';
     }
@@ -2682,6 +2687,7 @@ function _webGetFees(params) {
   th{background:#f8f9fa;font-weight:600;white-space:nowrap}
   td{word-break:keep-all}
   .none{color:#888;margin-top:16px}
+  .dup td{color:#fff}
   @media(max-width:480px){th,td{padding:6px 7px;font-size:13px}}
 </style>
 </head>
