@@ -453,6 +453,9 @@ function sortAndApplyStyle() {
   // 2. G열 주소 네이버 플레이스 링크 일괄 적용
   applyNaverLinksToAll();
 
+  // 2-1. J열 교습비 링크 일괄 갱신
+  applyFeeLinksToAll(false);
+
   // 3. 열 너비 및 행 높이 규격 강제 적용
   _applyColWidths(sh);
   sh.setRowHeights(start, n, 37);
@@ -2456,7 +2459,7 @@ function applyNaverLinksToAll() {
 // ═══════════════════════════════════════════════════════
 // ★ 공개 함수 — J열 연락처 전체에 교습비 링크 일괄 적용
 // ═══════════════════════════════════════════════════════
-function applyFeeLinksToAll() {
+function applyFeeLinksToAll(showToast) {
   const sh    = _U.sh(C_.SHEET.MAIN);
   const start = C_.START_ROW;
   const last  = _U.lastDataRow(sh);
@@ -2477,7 +2480,7 @@ function applyFeeLinksToAll() {
   });
 
   sh.getRange(start, C.연락처, n, 1).setRichTextValues(richValues);
-  _U.toast(`${n}행 교습비 링크 적용 완료`, '📞 교습비 링크', 4);
+  if (showToast !== false) _U.toast(`${n}행 교습비 링크 적용 완료`, '📞 교습비 링크', 4);
 }
 
 // ═══════════════════════════════════════════════════════
