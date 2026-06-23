@@ -114,6 +114,7 @@ const C_ = {
       SS_ID: '158ZNBb88raJ1kzBL3eFcgPZS9CGs5in0YtPtiPWfdic', GID: 1929773080, SHEET: '교습소조회',
       NAME: '교습소명', REGNO: '신고번호', ADDR: '교습소주소', OWNER: '교습자-성명',
       PHONE: '핸드폰', REG_DATE: '신고일', REG_COL: 5,
+      STATUS: '등록상태', STATUS_OK: '개원',
     },
     개인과외: {
       SS_ID: '158ZNBb88raJ1kzBL3eFcgPZS9CGs5in0YtPtiPWfdic', GID: 482385921, SHEET: '개인과외조회',
@@ -1436,7 +1437,7 @@ const _Master = {
 
   names(type) {
     const cache   = CacheService.getScriptCache();
-    const baseKey = `MN_v2_${type}`;
+    const baseKey = `MN_v3_${type}`;
     const metaHit = cache.get(baseKey);
     if (metaHit) {
       const meta = JSON.parse(metaHit);
@@ -1464,8 +1465,23 @@ const _Master = {
       else throw new Error(`"${conf.NAME}" 헤더 없음 (${type})`);
     }
 
-    const vals  = sh.getRange(2, nameI + 1, sh.getLastRow() - 1, 1).getDisplayValues().flat();
-    const names = [...new Set(vals.map(v => String(v || '').trim()).filter(Boolean))];
+    const statusI  = conf.STATUS  ? hdr.indexOf(conf.STATUS)  : -1;
+    const statusOk = conf.STATUS_OK || null;
+
+    let names;
+    if (statusI !== -1 && statusOk) {
+      const allData = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getDisplayValues();
+      const seen = new Set();
+      for (const row of allData) {
+        if (String(row[statusI] || '').trim() !== statusOk) continue;
+        const v = String(row[nameI] || '').trim();
+        if (v) seen.add(v);
+      }
+      names = [...seen];
+    } else {
+      const vals = sh.getRange(2, nameI + 1, sh.getLastRow() - 1, 1).getDisplayValues().flat();
+      names = [...new Set(vals.map(v => String(v || '').trim()).filter(Boolean))];
+    }
 
     const CHUNK = 500;
     let chunks  = 0;
@@ -1479,7 +1495,7 @@ const _Master = {
 
   info(type, name) {
     const cache = CacheService.getScriptCache();
-    const key   = `MI_v2_${type}_${_U.norm(name)}`;
+    const key   = `MI_v3_${type}_${_U.norm(name)}`;
     const hit   = cache.get(key);
     if (hit) return JSON.parse(hit);
 
@@ -1512,12 +1528,37 @@ const _Master = {
       else return null;
     }
 
-    const target  = String(name || '').trim();
+    const target   = String(name || '').trim();
+    const tNorm    = _U.norm(target);
+    const statusI  = conf.STATUS    ? hdr.indexOf(conf.STATUS)    : -1;
+    const statusOk = conf.STATUS_OK || null;
+
+    // 교습소처럼 STATUS 필터가 있으면 전체 스캔으로 개원 행만 선택
+    if (statusI !== -1 && statusOk) {
+      const allData = sh.getRange(2, 1, lastRow - 1, sh.getLastColumn()).getDisplayValues();
+      let openRow = null;
+      for (const row of allData) {
+        if (String(row[statusI] || '').trim() !== statusOk) continue;
+        if (_U.norm(String(row[idx.name - 1] || '').trim()) !== tNorm) continue;
+        openRow = row;
+        break;
+      }
+      if (!openRow) return null;
+      const info = {
+        regno:      idx.regno !== -1 ? String(openRow[idx.regno - 1] ?? '') : '',
+        addr:       idx.addr  !== -1 ? String(openRow[idx.addr  - 1] ?? '') : '',
+        owner:      idx.owner !== -1 ? String(openRow[idx.owner - 1] ?? '') : '',
+        phone:      idx.phone !== -1 ? String(openRow[idx.phone - 1] ?? '') : '',
+        regDateStr: String(openRow[regIdx - 1] ?? ''),
+      };
+      cache.put(key, JSON.stringify(info), C_.TTL);
+      return info;
+    }
+
     const nameRng = sh.getRange(2, idx.name, lastRow - 1, 1);
     let found     = nameRng.createTextFinder(target).matchEntireCell(true).findNext();
     if (!found) {
-      const tNorm = _U.norm(target);
-      const list  = nameRng.getDisplayValues().flat();
+      const list = nameRng.getDisplayValues().flat();
       for (let i = 0; i < list.length; i++) {
         if (_U.norm(list[i]) === tNorm) { found = sh.getRange(2 + i, idx.name); break; }
       }
@@ -2340,9 +2381,12 @@ function _batchLoadMaster() {
     };
     if (idx.name === -1) return;
 
-    const allData = sh.getRange(2, 1, lastRow - 1, sh.getLastColumn()).getDisplayValues();
-    const map     = new Map();
+    const allData  = sh.getRange(2, 1, lastRow - 1, sh.getLastColumn()).getDisplayValues();
+    const statusI  = conf.STATUS    ? hdr.indexOf(conf.STATUS)    : -1;
+    const statusOk = conf.STATUS_OK || null;
+    const map      = new Map();
     for (const row of allData) {
+      if (statusI !== -1 && statusOk && String(row[statusI] || '').trim() !== statusOk) continue;
       const rawName = String(row[idx.name] || '').trim();
       if (!rawName) continue;
       const norm = _U.norm(rawName);
