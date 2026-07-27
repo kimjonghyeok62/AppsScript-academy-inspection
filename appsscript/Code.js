@@ -2592,9 +2592,35 @@ function doGet(e) {
     return _webGetFees(e.parameter);
   }
 
+  if (action === 'getSnsChecks') {
+    return _webGetSnsChecks();
+  }
+
   return ContentService
     .createTextOutput(JSON.stringify({ ok: false, error: 'unknown action: ' + action }))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// SNS 게시점검 결과 저장 (레코드 수가 많아 POST 사용)
+function doPost(e) {
+  var action = (e && e.parameter && e.parameter.action) || '';
+  var payload = {};
+  try {
+    if (e && e.postData && e.postData.contents) payload = JSON.parse(e.postData.contents);
+  } catch (err) {
+    return _jsonOut({ ok: false, error: 'invalid JSON body: ' + err.message });
+  }
+  if (!action) action = payload.action || '';
+
+  if (action === 'saveSnsChecks') {
+    return _webSaveSnsChecks(payload.records || []);
+  }
+
+  if (action === 'deleteSnsChecks') {
+    return _webDeleteSnsChecks(payload);
+  }
+
+  return _jsonOut({ ok: false, error: 'unknown action: ' + action });
 }
 
 // 지도내용(M열) 업데이트: 날짜 + 학원명으로 행을 찾아 값을 씀
@@ -2802,4 +2828,158 @@ function _escHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+// ═══════════════════════════════════════════════════════
+// SNS(네이버플레이스·블로그) 교습비·등록번호 게시점검
+// ═══════════════════════════════════════════════════════
+
+var SNS_SS_ID     = '1zSGd9TBcJRculSJzUoZ2N8bB2iENuCI0x9KBpyfXMUo';
+var SNS_SHEET     = 'SNS게시점검';
+var SNS_HEADERS   = [
+  '확인일시', '구분', '등록번호', '학원명', '매칭상태', '매칭점수',
+  '플레이스ID', '플레이스명', '플레이스URL',
+  '플레이스_교습비', '플레이스_게시형태', '플레이스_번호', '플레이스_기재번호', '플레이스_번호대조',
+  '블로그', '블로그URL', '블로그_교습비', '블로그_번호', '블로그_기재번호', '블로그_번호대조',
+  '판정', '미이행사유', '비고'
+];
+
+function _jsonOut(obj) {
+  return ContentService
+    .createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// 시트를 얻고, 없으면 헤더와 함께 새로 만든다.
+// 헤더 구성이 바뀐 경우(항목 분리 등) 기존 시트는 지우지 않고 이름을 바꿔 보관한 뒤 새로 만든다.
+function _snsSheet() {
+  var ss = SpreadsheetApp.openById(SNS_SS_ID);
+  var sheet = ss.getSheetByName(SNS_SHEET);
+
+  if (sheet) {
+    var cur = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1)).getValues()[0]
+      .map(function (h) { return String(h).trim(); })
+      .filter(function (h) { return h !== ''; });
+    if (cur.join('') !== SNS_HEADERS.join('')) {
+      var stamp = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyyMMdd_HHmmss');
+      sheet.setName(SNS_SHEET + '_이전_' + stamp);
+      sheet = null;
+    }
+  }
+
+  if (!sheet) {
+    sheet = ss.insertSheet(SNS_SHEET);
+    sheet.getRange(1, 1, 1, SNS_HEADERS.length).setValues([SNS_HEADERS]);
+    sheet.setFrozenRows(1);
+    sheet.getRange(1, 1, 1, SNS_HEADERS.length).setFontWeight('bold');
+  }
+  return sheet;
+}
+
+function _snsKey(category, regNo) {
+  return String(category || '').trim() + '|' + String(regNo || '').trim();
+}
+
+function _webGetSnsChecks() {
+  try {
+    var sheet = _snsSheet();
+    var last  = sheet.getLastRow();
+    if (last < 2) return _jsonOut({ ok: true, rows: [] });
+
+    var values = sheet.getRange(1, 1, last, SNS_HEADERS.length).getValues();
+    var head   = values[0].map(function (h) { return String(h).trim(); });
+    var rows   = [];
+    for (var r = 1; r < values.length; r++) {
+      var obj = {}, empty = true;
+      for (var c = 0; c < head.length; c++) {
+        var v = values[r][c];
+        if (v instanceof Date) v = Utilities.formatDate(v, 'Asia/Seoul', "yyyy-MM-dd'T'HH:mm:ss");
+        obj[head[c]] = v === null || v === undefined ? '' : String(v);
+        if (obj[head[c]] !== '') empty = false;
+      }
+      if (!empty) rows.push(obj);
+    }
+    return _jsonOut({ ok: true, rows: rows });
+  } catch (err) {
+    return _jsonOut({ ok: false, error: err.message });
+  }
+}
+
+// records: [{확인일시, 구분, 등록번호, 학원명, ...}] — 구분+등록번호 기준 upsert
+function _webSaveSnsChecks(records) {
+  try {
+    if (!records || !records.length) return _jsonOut({ ok: true, saved: 0 });
+
+    var sheet = _snsSheet();
+    var last  = sheet.getLastRow();
+    var width = SNS_HEADERS.length;
+
+    // 기존 행 위치 색인 (비고는 수기 입력이라 값이 안 넘어오면 보존)
+    var index = {}, existing = [];
+    if (last >= 2) {
+      existing = sheet.getRange(2, 1, last - 1, width).getValues();
+      for (var i = 0; i < existing.length; i++) {
+        index[_snsKey(existing[i][1], existing[i][2])] = i;
+      }
+    }
+
+    var appended = 0, updated = 0;
+    var newRows = [];
+    for (var n = 0; n < records.length; n++) {
+      var rec = records[n] || {};
+      var key = _snsKey(rec['구분'], rec['등록번호']);
+      var row = [];
+      for (var h = 0; h < width; h++) {
+        var name = SNS_HEADERS[h];
+        var val  = rec[name];
+        row.push(val === null || val === undefined ? '' : String(val));
+      }
+      if (index.hasOwnProperty(key)) {
+        var at = index[key];
+        // 비고가 비어서 넘어오면 기존 값 유지
+        if (row[width - 1] === '') row[width - 1] = existing[at][width - 1];
+        sheet.getRange(at + 2, 1, 1, width).setValues([row]);
+        existing[at] = row;
+        updated++;
+      } else {
+        index[key] = existing.length;
+        existing.push(row);
+        newRows.push(row);
+        appended++;
+      }
+    }
+
+    if (newRows.length) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, width).setValues(newRows);
+    }
+    return _jsonOut({ ok: true, saved: records.length, appended: appended, updated: updated });
+  } catch (err) {
+    return _jsonOut({ ok: false, error: err.message });
+  }
+}
+
+// 잘못 기록된 행 삭제 (예: 네이버 차단으로 일괄 '확인불가' 처리된 행)
+// keys: ["학원|1185", ...] 또는 matchStatus: 'error' 로 일괄 삭제
+function _webDeleteSnsChecks(params) {
+  try {
+    var sheet = _snsSheet();
+    var last  = sheet.getLastRow();
+    if (last < 2) return _jsonOut({ ok: true, deleted: 0 });
+
+    var width  = SNS_HEADERS.length;
+    var values = sheet.getRange(2, 1, last - 1, width).getValues();
+    var keySet = {};
+    (params.keys || []).forEach(function (k) { keySet[k] = true; });
+    var byStatus = params.matchStatus || '';
+
+    var deleted = 0;
+    // 아래에서 위로 지워야 행 번호가 밀리지 않는다
+    for (var i = values.length - 1; i >= 0; i--) {
+      var row = values[i];
+      var hit = keySet[_snsKey(row[1], row[2])] || (byStatus && String(row[4]).trim() === byStatus);
+      if (hit) { sheet.deleteRow(i + 2); deleted++; }
+    }
+    return _jsonOut({ ok: true, deleted: deleted });
+  } catch (err) {
+    return _jsonOut({ ok: false, error: err.message });
+  }
 }
