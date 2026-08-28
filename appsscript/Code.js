@@ -2840,8 +2840,13 @@ var SNS_HEADERS   = [
   '플레이스ID', '플레이스명', '플레이스URL',
   '플레이스_교습비', '플레이스_게시형태', '플레이스_번호', '플레이스_기재번호', '플레이스_번호대조',
   '블로그', '블로그URL', '블로그_교습비', '블로그_번호', '블로그_기재번호', '블로그_번호대조',
-  '판정', '미이행사유', '비고'
+  '판정', '미이행사유', '비고',
+  // 플레이스 홈에 걸린 링크(블로그·홈페이지·인스타그램…) 전체 결과 — 채널상세는 JSON 문자열
+  '채널수', '채널상세'
 ];
+
+// 수기 입력 항목이라 값이 안 넘어오면 기존 값을 보존한다 (컬럼이 늘어도 위치가 안 밀리게 이름으로 찾는다)
+var SNS_REMARK_COL = SNS_HEADERS.indexOf('비고');
 
 function _jsonOut(obj) {
   return ContentService
@@ -2860,9 +2865,18 @@ function _snsSheet() {
       .map(function (h) { return String(h).trim(); })
       .filter(function (h) { return h !== ''; });
     if (cur.join('') !== SNS_HEADERS.join('')) {
-      var stamp = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyyMMdd_HHmmss');
-      sheet.setName(SNS_SHEET + '_이전_' + stamp);
-      sheet = null;
+      // 뒤에 컬럼만 추가된 경우엔 기존 조사 결과를 살리고 헤더 칸만 늘린다.
+      // (순서가 바뀌었거나 컬럼이 없어졌다면 그때만 시트를 갈아끼운다)
+      var appendOnly = cur.length < SNS_HEADERS.length
+        && cur.join('') === SNS_HEADERS.slice(0, cur.length).join('');
+      if (appendOnly) {
+        var add = SNS_HEADERS.slice(cur.length);
+        sheet.getRange(1, cur.length + 1, 1, add.length).setValues([add]).setFontWeight('bold');
+      } else {
+        var stamp = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyyMMdd_HHmmss');
+        sheet.setName(SNS_SHEET + '_이전_' + stamp);
+        sheet = null;
+      }
     }
   }
 
@@ -2936,7 +2950,7 @@ function _webSaveSnsChecks(records) {
       if (index.hasOwnProperty(key)) {
         var at = index[key];
         // 비고가 비어서 넘어오면 기존 값 유지
-        if (row[width - 1] === '') row[width - 1] = existing[at][width - 1];
+        if (row[SNS_REMARK_COL] === '') row[SNS_REMARK_COL] = existing[at][SNS_REMARK_COL];
         sheet.getRange(at + 2, 1, 1, width).setValues([row]);
         existing[at] = row;
         updated++;
