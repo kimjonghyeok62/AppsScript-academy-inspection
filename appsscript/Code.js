@@ -592,6 +592,7 @@ function onOpen() {
     .addItem('📊 학원,교습소,개인과외 통계 생성', 'buildCombinedStatSheet')
     .addSeparator()
     .addItem('🔄 점검이력 인덱스 갱신', 'rebuildHistoryIndex')
+    .addItem('📞 SNS게시점검 연락처 채우기', 'fillSnsContacts')
     .addToUi();
 
   try { _applyColumnLayout(_U.sh(C_.SHEET.MAIN)); } catch (_) {}
@@ -2596,6 +2597,15 @@ function doGet(e) {
     return _webGetSnsChecks();
   }
 
+  if (action === 'fillSnsContacts') {
+    try {
+      var r = _snsBackfillContacts();
+      return _jsonOut({ ok: true, filled: r.filled, blank: r.blank, total: r.total });
+    } catch (err) {
+      return _jsonOut({ ok: false, error: err.message });
+    }
+  }
+
   return ContentService
     .createTextOutput(JSON.stringify({ ok: false, error: 'unknown action: ' + action }))
     .setMimeType(ContentService.MimeType.JSON);
@@ -2836,7 +2846,7 @@ function _escHtml(str) {
 var SNS_SS_ID     = '1zSGd9TBcJRculSJzUoZ2N8bB2iENuCI0x9KBpyfXMUo';
 var SNS_SHEET     = 'SNS게시점검';
 var SNS_HEADERS   = [
-  '확인일시', '구분', '등록번호', '학원명', '매칭상태', '매칭점수',
+  '확인일시', '구분', '등록번호', '학원명', '연락처', '매칭상태', '매칭점수',
   '플레이스ID', '플레이스명', '플레이스URL',
   '플레이스_교습비', '플레이스_게시형태', '플레이스_번호', '플레이스_기재번호', '플레이스_번호대조',
   '블로그', '블로그URL', '블로그_교습비', '블로그_번호', '블로그_기재번호', '블로그_번호대조',
@@ -2845,8 +2855,11 @@ var SNS_HEADERS   = [
   '채널수', '채널상세'
 ];
 
-// 수기 입력 항목이라 값이 안 넘어오면 기존 값을 보존한다 (컬럼이 늘어도 위치가 안 밀리게 이름으로 찾는다)
-var SNS_REMARK_COL = SNS_HEADERS.indexOf('비고');
+// 값이 안 넘어오면 기존 값을 보존하는 컬럼 (컬럼이 늘어도 위치가 안 밀리게 이름으로 찾는다)
+//  비고   — 담당자가 손으로 적는 칸
+//  연락처 — 조사 결과에는 없고 마스터에서 채우는 칸이라, 저장할 때마다 지워지면 안 된다
+var SNS_REMARK_COL  = SNS_HEADERS.indexOf('비고');
+var SNS_CONTACT_COL = SNS_HEADERS.indexOf('연락처');
 
 function _jsonOut(obj) {
   return ContentService
@@ -2865,13 +2878,12 @@ function _snsSheet() {
       .map(function (h) { return String(h).trim(); })
       .filter(function (h) { return h !== ''; });
     if (cur.join('') !== SNS_HEADERS.join('')) {
-      // 뒤에 컬럼만 추가된 경우엔 기존 조사 결과를 살리고 헤더 칸만 늘린다.
-      // (순서가 바뀌었거나 컬럼이 없어졌다면 그때만 시트를 갈아끼운다)
-      var appendOnly = cur.length < SNS_HEADERS.length
-        && cur.join('') === SNS_HEADERS.slice(0, cur.length).join('');
-      if (appendOnly) {
-        var add = SNS_HEADERS.slice(cur.length);
-        sheet.getRange(1, cur.length + 1, 1, add.length).setValues([add]).setFontWeight('bold');
+      // 지금 헤더의 컬럼이 모두 새 헤더에도 있으면 (뒤에 붙든 중간에 끼든) 버릴 값이 없다.
+      // 이름을 보고 옮겨 담아 기존 조사 결과를 그대로 살린다.
+      // 모르는 컬럼이 섞여 있을 때만 — 남의 시트일 수 있으므로 — 이름을 바꿔 보관한다.
+      var known = cur.every(function (h) { return SNS_HEADERS.indexOf(h) !== -1; });
+      if (known) {
+        _snsMigrate(sheet, cur);
       } else {
         var stamp = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyyMMdd_HHmmss');
         sheet.setName(SNS_SHEET + '_이전_' + stamp);
@@ -2891,6 +2903,64 @@ function _snsSheet() {
 
 function _snsKey(category, regNo) {
   return String(category || '').trim() + '|' + String(regNo || '').trim();
+}
+
+// 기존 행을 컬럼 이름 기준으로 새 헤더 자리에 옮겨 담는다.
+// 새로 생긴 컬럼은 빈 값으로 두고, 다음 저장이나 '연락처 채우기' 때 메워진다.
+function _snsMigrate(sheet, cur) {
+  var last = sheet.getLastRow();
+  var rows = last >= 2 ? sheet.getRange(2, 1, last - 1, cur.length).getValues() : [];
+
+  var at = {};
+  for (var i = 0; i < cur.length; i++) at[cur[i]] = i;
+
+  var moved = rows.map(function (row) {
+    return SNS_HEADERS.map(function (name) {
+      var c = at[name];
+      return c === undefined ? '' : row[c];
+    });
+  });
+
+  // 통째로 비우고 다시 쓰는 작업이라, 도중에 실행이 끊겨도 되돌릴 수 있게 사본을 남긴다.
+  // (한 번 지나가면 헤더가 맞아떨어져 다시 오지 않는 길이다)
+  if (rows.length) {
+    try {
+      var stamp = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyyMMdd_HHmmss');
+      var backup = sheet.copyTo(sheet.getParent()).setName(SNS_SHEET + '_백업_' + stamp);
+      backup.hideSheet();
+    } catch (err) { /* 사본을 못 만들어도 진행한다 — 원본은 아래에서 그대로 다시 쓴다 */ }
+  }
+
+  // 컬럼이 줄어든 경우 오른쪽에 옛 값이 남지 않도록 통째로 비우고 다시 쓴다
+  sheet.clearContents();
+  sheet.getRange(1, 1, 1, SNS_HEADERS.length).setValues([SNS_HEADERS]).setFontWeight('bold');
+  if (moved.length) sheet.getRange(2, 1, moved.length, SNS_HEADERS.length).setValues(moved);
+  sheet.setFrozenRows(1);
+}
+
+// 등록(신고)번호 → 핸드폰. 이름이 바뀐 곳이 있어 번호를 먼저 보고, 없으면 이름으로 찾는다.
+function _snsContactIndex() {
+  var master = _batchLoadMaster();
+  var byNo = {}, byName = {};
+  ['학원', '교습소'].forEach(function (type) {
+    var m = master[type];
+    if (!m) return;
+    m.forEach(function (info, norm) {
+      if (!info || !info.phone) return;
+      var no = String(info.regno || '').replace(/[^0-9]/g, '');
+      if (no) byNo[type + '|' + no] = info.phone;
+      byName[type + '|' + norm] = info.phone;
+    });
+  });
+  return { byNo: byNo, byName: byName };
+}
+
+function _snsContactOf(idx, category, regNo, name) {
+  var type = String(category || '').trim();
+  var no   = String(regNo || '').replace(/[^0-9]/g, '');
+  return (no && idx.byNo[type + '|' + no])
+    || idx.byName[type + '|' + _U.norm(name)]
+    || '';
 }
 
 function _webGetSnsChecks() {
@@ -2927,7 +2997,7 @@ function _webSaveSnsChecks(records) {
     var last  = sheet.getLastRow();
     var width = SNS_HEADERS.length;
 
-    // 기존 행 위치 색인 (비고는 수기 입력이라 값이 안 넘어오면 보존)
+    // 기존 행 위치 색인 (비고·연락처는 조사 결과에 없으므로 값이 안 넘어오면 보존)
     var index = {}, existing = [];
     if (last >= 2) {
       existing = sheet.getRange(2, 1, last - 1, width).getValues();
@@ -2936,39 +3006,97 @@ function _webSaveSnsChecks(records) {
       }
     }
 
-    var appended = 0, updated = 0;
-    var newRows = [];
+    // 1) 쓸 행을 먼저 다 만든다 (연락처를 채운 뒤에 한 번만 쓰기 위해)
+    var plan = [];
     for (var n = 0; n < records.length; n++) {
       var rec = records[n] || {};
       var key = _snsKey(rec['구분'], rec['등록번호']);
       var row = [];
       for (var h = 0; h < width; h++) {
-        var name = SNS_HEADERS[h];
-        var val  = rec[name];
+        var val = rec[SNS_HEADERS[h]];
         row.push(val === null || val === undefined ? '' : String(val));
       }
       if (index.hasOwnProperty(key)) {
         var at = index[key];
-        // 비고가 비어서 넘어오면 기존 값 유지
+        // 비고·연락처가 비어서 넘어오면 기존 값 유지
         if (row[SNS_REMARK_COL] === '') row[SNS_REMARK_COL] = existing[at][SNS_REMARK_COL];
-        sheet.getRange(at + 2, 1, 1, width).setValues([row]);
+        if (row[SNS_CONTACT_COL] === '') row[SNS_CONTACT_COL] = existing[at][SNS_CONTACT_COL];
+        plan.push({ row: row, at: at });
         existing[at] = row;
-        updated++;
       } else {
         index[key] = existing.length;
         existing.push(row);
-        newRows.push(row);
-        appended++;
+        plan.push({ row: row, at: -1 });
       }
     }
 
+    // 2) 아직 연락처가 빈 행만 마스터에서 채운다.
+    //    마스터를 읽는 값이 비싸므로 채울 것이 있을 때만 한 번 읽는다.
+    _snsFillContacts(plan.map(function (p) { return p.row; }));
+
+    // 3) 기록 — 기존 행은 제자리에, 새 행은 아래에 한꺼번에
+    var updated = 0, newRows = [];
+    for (var k = 0; k < plan.length; k++) {
+      if (plan[k].at >= 0) {
+        sheet.getRange(plan[k].at + 2, 1, 1, width).setValues([plan[k].row]);
+        updated++;
+      } else {
+        newRows.push(plan[k].row);
+      }
+    }
     if (newRows.length) {
       sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, width).setValues(newRows);
     }
-    return _jsonOut({ ok: true, saved: records.length, appended: appended, updated: updated });
+    return _jsonOut({ ok: true, saved: records.length, appended: newRows.length, updated: updated });
   } catch (err) {
     return _jsonOut({ ok: false, error: err.message });
   }
+}
+
+// 연락처가 빈 행을 마스터(학원조회·교습소조회)의 핸드폰으로 채운다.
+// 조사 결과에는 연락처가 없으므로 시트에 담는 것은 여기가 유일한 통로다.
+// 채울 행이 없으면 마스터를 아예 읽지 않는다.
+function _snsFillContacts(rows) {
+  var todo = (rows || []).filter(function (r) { return !String(r[SNS_CONTACT_COL] || '').trim(); });
+  if (!todo.length) return 0;
+
+  var idx;
+  try {
+    idx = _snsContactIndex();
+  } catch (err) {
+    return 0;   // 마스터를 못 읽어도 조사 결과 저장은 막지 않는다
+  }
+
+  var filled = 0;
+  todo.forEach(function (r) {
+    var phone = _snsContactOf(idx, r[1], r[2], r[3]);   // 구분, 등록번호, 학원명
+    if (phone) { r[SNS_CONTACT_COL] = phone; filled++; }
+  });
+  return filled;
+}
+
+// 이미 쌓인 행의 연락처를 마스터에서 한 번에 채운다 (UI 없음 — 메뉴·웹 양쪽에서 쓴다)
+function _snsBackfillContacts() {
+  var sheet = _snsSheet();
+  var last  = sheet.getLastRow();
+  if (last < 2) return { filled: 0, blank: 0, total: 0 };
+
+  var range = sheet.getRange(2, 1, last - 1, SNS_HEADERS.length);
+  var rows  = range.getValues();
+  var filled = _snsFillContacts(rows);
+  if (filled) range.setValues(rows);
+
+  var blank = rows.filter(function (r) { return !String(r[SNS_CONTACT_COL] || '').trim(); }).length;
+  return { filled: filled, blank: blank, total: rows.length };
+}
+
+// ★ 공개 함수 — 메뉴에서 실행
+function fillSnsContacts() {
+  var r = _snsBackfillContacts();
+  SpreadsheetApp.getUi().alert(
+    '연락처 ' + r.filled + '곳을 채웠습니다. (전체 ' + r.total + '곳)' +
+    (r.blank ? '\n\n마스터에 핸드폰이 없어 비워 둔 곳: ' + r.blank + '곳' : '')
+  );
 }
 
 // 잘못 기록된 행 삭제 (예: 네이버 차단으로 일괄 '확인불가' 처리된 행)
