@@ -2851,15 +2851,19 @@ var SNS_HEADERS   = [
   '플레이스_교습비', '플레이스_게시형태', '플레이스_번호', '플레이스_기재번호', '플레이스_번호대조',
   '블로그', '블로그URL', '블로그_교습비', '블로그_번호', '블로그_기재번호', '블로그_번호대조',
   '판정', '미이행사유', '비고',
+  // 담당자가 직접 확인해 고친 칸 — {"place|교습비":"O", ...} JSON 문자열
+  '수동확인',
   // 플레이스 홈에 걸린 링크(블로그·홈페이지·인스타그램…) 전체 결과 — 채널상세는 JSON 문자열
   '채널수', '채널상세'
 ];
 
 // 값이 안 넘어오면 기존 값을 보존하는 컬럼 (컬럼이 늘어도 위치가 안 밀리게 이름으로 찾는다)
-//  비고   — 담당자가 손으로 적는 칸
-//  연락처 — 조사 결과에는 없고 마스터에서 채우는 칸이라, 저장할 때마다 지워지면 안 된다
+//  비고     — 담당자가 손으로 적는 칸
+//  연락처   — 조사 결과에는 없고 마스터에서 채우는 칸이라, 저장할 때마다 지워지면 안 된다
+//  수동확인 — 담당자가 직접 보고 고친 값. 자동 조사가 이걸 덮으면 고친 의미가 없다
 var SNS_REMARK_COL  = SNS_HEADERS.indexOf('비고');
 var SNS_CONTACT_COL = SNS_HEADERS.indexOf('연락처');
+var SNS_MANUAL_COL  = SNS_HEADERS.indexOf('수동확인');
 
 function _jsonOut(obj) {
   return ContentService
@@ -2997,7 +3001,7 @@ function _webSaveSnsChecks(records) {
     var last  = sheet.getLastRow();
     var width = SNS_HEADERS.length;
 
-    // 기존 행 위치 색인 (비고·연락처는 조사 결과에 없으므로 값이 안 넘어오면 보존)
+    // 기존 행 위치 색인 (비고·연락처·수동확인은 조사 결과에 없으므로 값이 안 넘어오면 보존)
     var index = {}, existing = [];
     if (last >= 2) {
       existing = sheet.getRange(2, 1, last - 1, width).getValues();
@@ -3018,9 +3022,11 @@ function _webSaveSnsChecks(records) {
       }
       if (index.hasOwnProperty(key)) {
         var at = index[key];
-        // 비고·연락처가 비어서 넘어오면 기존 값 유지
+        // 비고·연락처·수동확인이 비어서 넘어오면 기존 값 유지
+        // (자동 조사 결과에는 이 셋이 없다 — 그대로 쓰면 담당자가 적어둔 값이 지워진다)
         if (row[SNS_REMARK_COL] === '') row[SNS_REMARK_COL] = existing[at][SNS_REMARK_COL];
         if (row[SNS_CONTACT_COL] === '') row[SNS_CONTACT_COL] = existing[at][SNS_CONTACT_COL];
+        if (row[SNS_MANUAL_COL] === '') row[SNS_MANUAL_COL] = existing[at][SNS_MANUAL_COL];
         plan.push({ row: row, at: at });
         existing[at] = row;
       } else {
