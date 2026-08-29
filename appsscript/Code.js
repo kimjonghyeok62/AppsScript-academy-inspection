@@ -2854,16 +2854,26 @@ var SNS_HEADERS   = [
   // 담당자가 직접 확인해 고친 칸 — {"place|교습비":"O", ...} JSON 문자열
   '수동확인',
   // 플레이스 홈에 걸린 링크(블로그·홈페이지·인스타그램…) 전체 결과 — 채널상세는 JSON 문자열
-  '채널수', '채널상세'
+  '채널수', '채널상세',
+  // 담당자가 직접 지정한 플레이스 ID — 이름만으로는 '나룰음악학원'과 '나룰음악학원 2호점'을
+  // 가려내지 못해 1호점이 2호점 플레이스에 붙는 일이 있었다. 지정하면 다시 조사해도 그 곳만 본다.
+  // 지정을 푼 자리는 '-' 로 남긴다 (빈 값은 '안 넘어온 것'으로 보고 기존 값을 지키기 때문)
+  '플레이스지정',
+  // 여러 학원이 블로그·플레이스 하나를 함께 쓰는 곳의 묶음 이름 (예: '페르마').
+  // 같은 값이 적힌 학원끼리 한 묶음이 되고, 교습비 게시 여부가 함께 반영된다
+  '묶음'
 ];
 
 // 값이 안 넘어오면 기존 값을 보존하는 컬럼 (컬럼이 늘어도 위치가 안 밀리게 이름으로 찾는다)
-//  비고     — 담당자가 손으로 적는 칸
-//  연락처   — 조사 결과에는 없고 마스터에서 채우는 칸이라, 저장할 때마다 지워지면 안 된다
-//  수동확인 — 담당자가 직접 보고 고친 값. 자동 조사가 이걸 덮으면 고친 의미가 없다
+//  비고         — 담당자가 손으로 적는 칸
+//  연락처       — 조사 결과에는 없고 마스터에서 채우는 칸이라, 저장할 때마다 지워지면 안 된다
+//  수동확인     — 담당자가 직접 보고 고친 값. 자동 조사가 이걸 덮으면 고친 의미가 없다
+//  플레이스지정·묶음 — 위와 같이 사람이 정한 값이다
 var SNS_REMARK_COL  = SNS_HEADERS.indexOf('비고');
 var SNS_CONTACT_COL = SNS_HEADERS.indexOf('연락처');
 var SNS_MANUAL_COL  = SNS_HEADERS.indexOf('수동확인');
+var SNS_PIN_COL     = SNS_HEADERS.indexOf('플레이스지정');
+var SNS_GROUP_COL   = SNS_HEADERS.indexOf('묶음');
 
 function _jsonOut(obj) {
   return ContentService
@@ -3027,6 +3037,8 @@ function _webSaveSnsChecks(records) {
         if (row[SNS_REMARK_COL] === '') row[SNS_REMARK_COL] = existing[at][SNS_REMARK_COL];
         if (row[SNS_CONTACT_COL] === '') row[SNS_CONTACT_COL] = existing[at][SNS_CONTACT_COL];
         if (row[SNS_MANUAL_COL] === '') row[SNS_MANUAL_COL] = existing[at][SNS_MANUAL_COL];
+        if (row[SNS_PIN_COL] === '') row[SNS_PIN_COL] = existing[at][SNS_PIN_COL];
+        if (row[SNS_GROUP_COL] === '') row[SNS_GROUP_COL] = existing[at][SNS_GROUP_COL];
         plan.push({ row: row, at: at });
         existing[at] = row;
       } else {
