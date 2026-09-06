@@ -2597,6 +2597,13 @@ function doGet(e) {
     return _webGetSnsChecks();
   }
 
+  // 학원 회신 페이지가 자기 행 하나만 읽어 가는 자리 (api/reply.js 만 부른다).
+  // 1,000행을 통째로 받게 하지 않으려는 것이고, 공개 프록시로 흘러들어와도
+  // 남의 행을 못 읽도록 공유키를 요구한다.
+  if (action === 'getSnsCheckOne') {
+    return _webGetSnsCheckOne(e.parameter);
+  }
+
   if (action === 'fillSnsContacts') {
     try {
       var r = _snsBackfillContacts();
@@ -2628,6 +2635,10 @@ function doPost(e) {
 
   if (action === 'deleteSnsChecks') {
     return _webDeleteSnsChecks(payload);
+  }
+
+  if (action === 'saveSnsReply') {
+    return _webSaveSnsReply(payload);
   }
 
   return _jsonOut({ ok: false, error: 'unknown action: ' + action });
@@ -2864,7 +2875,14 @@ var SNS_HEADERS   = [
   '묶음',
   // 담당자가 진행사항·특이사항을 적는 칸 (화면에서 50자까지).
   // 빈 값은 아래 규약대로 '안 넘어온 것'이라 기존 값을 지키므로, 지우기는 '-' 로 넘어온다
-  '적요'
+  '적요',
+  // ── 학원이 스스로 알려 오는 자리 ─────────────────────
+  // 발송일시 — 담당자가 안내 문자를 만든 시각. '기한이 지나도록 회신이 없는 곳'을 세려면
+  //            보낸 날이 어딘가 남아 있어야 한다 (문자를 만든 때이지 실제 발송 시각은 아니다)
+  // 회신일시 — 학원이 회신 페이지에서 보낸 시각. 이 칸이 비어 있는 것이 곧 '무응답'이다
+  // 회신내용 — 학원이 표시한 것을 사람이 읽는 한 줄로 적는다
+  //            ('플레이스 교습비 O / 블로그 번호 X'). 시트를 열어 읽어야 하는 값이라 JSON 이 아니다
+  '발송일시', '회신일시', '회신내용'
 ];
 
 // 값이 안 넘어오면 기존 값을 보존하는 컬럼 (컬럼이 늘어도 위치가 안 밀리게 이름으로 찾는다)
@@ -2879,6 +2897,13 @@ var SNS_MANUAL_COL  = SNS_HEADERS.indexOf('수동확인');
 var SNS_PIN_COL     = SNS_HEADERS.indexOf('플레이스지정');
 var SNS_GROUP_COL   = SNS_HEADERS.indexOf('묶음');
 var SNS_MEMO_COL    = SNS_HEADERS.indexOf('적요');
+//  발송일시·회신일시·회신내용 — 담당자 화면은 회신 두 칸을 실어 보내지 않고,
+//  자동 조사 결과에는 셋 다 없다. 보존하지 않으면 저장할 때마다 학원 회신이 지워진다
+var SNS_SENT_COL     = SNS_HEADERS.indexOf('발송일시');
+var SNS_REPLY_AT_COL = SNS_HEADERS.indexOf('회신일시');
+var SNS_REPLY_COL    = SNS_HEADERS.indexOf('회신내용');
+// 회신내용 한 칸의 길이 상한 (api/reply.js 의 REPLY_MAX 와 맞출 것)
+var SNS_REPLY_MAX    = 300;
 
 function _jsonOut(obj) {
   return ContentService
@@ -2982,6 +3007,19 @@ function _snsContactOf(idx, category, regNo, name) {
     || '';
 }
 
+// 시트 한 줄 -> { 열이름: 값 }. 통째로 빈 줄이면 null.
+// 전체 조회와 한 건 조회가 같은 모양을 내야 한다 - 화면(rowToResult)이 둘을 가리지 않는다.
+function _snsRowObj(head, row) {
+  var obj = {}, empty = true;
+  for (var c = 0; c < head.length; c++) {
+    var v = row[c];
+    if (v instanceof Date) v = Utilities.formatDate(v, 'Asia/Seoul', "yyyy-MM-dd'T'HH:mm:ss");
+    obj[head[c]] = v === null || v === undefined ? '' : String(v);
+    if (obj[head[c]] !== '') empty = false;
+  }
+  return empty ? null : obj;
+}
+
 function _webGetSnsChecks() {
   try {
     var sheet = _snsSheet();
@@ -2992,16 +3030,73 @@ function _webGetSnsChecks() {
     var head   = values[0].map(function (h) { return String(h).trim(); });
     var rows   = [];
     for (var r = 1; r < values.length; r++) {
-      var obj = {}, empty = true;
-      for (var c = 0; c < head.length; c++) {
-        var v = values[r][c];
-        if (v instanceof Date) v = Utilities.formatDate(v, 'Asia/Seoul', "yyyy-MM-dd'T'HH:mm:ss");
-        obj[head[c]] = v === null || v === undefined ? '' : String(v);
-        if (obj[head[c]] !== '') empty = false;
-      }
-      if (!empty) rows.push(obj);
+      var obj = _snsRowObj(head, values[r]);
+      if (obj) rows.push(obj);
     }
     return _jsonOut({ ok: true, rows: rows });
+  } catch (err) {
+    return _jsonOut({ ok: false, error: err.message });
+  }
+}
+
+// ── 학원 회신 (회신 링크) ───────────────────────────────
+// 학원은 문자로 받은 주소 하나로 들어와 자기 행만 읽고, 고쳤다고 표시한 것만 남긴다.
+// 아래 두 액션은 Script Properties 의 REPLY_API_KEY 를 요구한다 - /api/apps-script-proxy 가
+// 인증 없이 열려 있어, 이 문턱이 없으면 누구나 남의 행을 읽고 쓸 수 있다.
+function _replyKeyOk(key) {
+  var want = PropertiesService.getScriptProperties().getProperty('REPLY_API_KEY') || '';
+  return !!want && String(key || '') === want;
+}
+
+// 구분+등록번호로 한 행만. 못 찾으면 row: null - 오류가 아니다 (아직 조사 안 한 학원이다).
+function _webGetSnsCheckOne(params) {
+  try {
+    if (!_replyKeyOk(params && params.key)) return _jsonOut({ ok: false, error: 'unauthorized' });
+    var want = _snsKey(params && params.category, params && params.regNo);
+    if (want === '|') return _jsonOut({ ok: false, error: 'category·regNo 가 필요합니다' });
+
+    var sheet = _snsSheet();
+    var last  = sheet.getLastRow();
+    if (last < 2) return _jsonOut({ ok: true, row: null });
+
+    var values = sheet.getRange(1, 1, last, SNS_HEADERS.length).getValues();
+    var head   = values[0].map(function (h) { return String(h).trim(); });
+    for (var r = 1; r < values.length; r++) {
+      if (_snsKey(values[r][1], values[r][2]) === want) {
+        return _jsonOut({ ok: true, row: _snsRowObj(head, values[r]) });
+      }
+    }
+    return _jsonOut({ ok: true, row: null });
+  } catch (err) {
+    return _jsonOut({ ok: false, error: err.message });
+  }
+}
+
+// 학원이 회신 페이지에서 보낸 것 - 그 행의 회신일시·회신내용 두 칸만 쓴다.
+// saveSnsChecks 로 성긴 레코드를 보내면 안 된다: 보존 목록 밖의 열(판정·채널상세…)이
+// 빈 문자열로 덮여 행이 통째로 망가진다.
+function _webSaveSnsReply(payload) {
+  try {
+    if (!_replyKeyOk(payload && payload.key)) return _jsonOut({ ok: false, error: 'unauthorized' });
+    var want = _snsKey(payload && payload.category, payload && payload.regNo);
+    if (want === '|') return _jsonOut({ ok: false, error: 'category·regNo 가 필요합니다' });
+
+    var sheet = _snsSheet();
+    var last  = sheet.getLastRow();
+    if (last < 2) return _jsonOut({ ok: false, error: '행을 찾지 못했습니다' });
+
+    // 구분·등록번호 두 열만 읽어 자리를 찾는다 (행 전체를 들고 올 이유가 없다)
+    var keys = sheet.getRange(2, 2, last - 1, 2).getValues();
+    for (var i = 0; i < keys.length; i++) {
+      if (_snsKey(keys[i][0], keys[i][1]) !== want) continue;
+      var at   = i + 2;
+      var when = String((payload && payload.repliedAt) || new Date().toISOString());
+      var text = String((payload && payload.text) || '').slice(0, SNS_REPLY_MAX);
+      sheet.getRange(at, SNS_REPLY_AT_COL + 1).setValue(when);
+      sheet.getRange(at, SNS_REPLY_COL + 1).setValue(text);
+      return _jsonOut({ ok: true, row: at });
+    }
+    return _jsonOut({ ok: false, error: '행을 찾지 못했습니다' });
   } catch (err) {
     return _jsonOut({ ok: false, error: err.message });
   }
@@ -3045,6 +3140,9 @@ function _webSaveSnsChecks(records) {
         if (row[SNS_PIN_COL] === '') row[SNS_PIN_COL] = existing[at][SNS_PIN_COL];
         if (row[SNS_GROUP_COL] === '') row[SNS_GROUP_COL] = existing[at][SNS_GROUP_COL];
         if (row[SNS_MEMO_COL] === '') row[SNS_MEMO_COL] = existing[at][SNS_MEMO_COL];
+        if (row[SNS_SENT_COL] === '') row[SNS_SENT_COL] = existing[at][SNS_SENT_COL];
+        if (row[SNS_REPLY_AT_COL] === '') row[SNS_REPLY_AT_COL] = existing[at][SNS_REPLY_AT_COL];
+        if (row[SNS_REPLY_COL] === '') row[SNS_REPLY_COL] = existing[at][SNS_REPLY_COL];
         plan.push({ row: row, at: at });
         existing[at] = row;
       } else {
