@@ -2597,13 +2597,6 @@ function doGet(e) {
     return _webGetSnsChecks();
   }
 
-  // 학원 회신 페이지가 자기 행 하나만 읽어 가는 자리 (api/reply.js 만 부른다).
-  // 1,000행을 통째로 받게 하지 않으려는 것이고, 공개 프록시로 흘러들어와도
-  // 남의 행을 못 읽도록 공유키를 요구한다.
-  if (action === 'getSnsCheckOne') {
-    return _webGetSnsCheckOne(e.parameter);
-  }
-
   if (action === 'fillSnsContacts') {
     try {
       var r = _snsBackfillContacts();
@@ -2635,6 +2628,12 @@ function doPost(e) {
 
   if (action === 'deleteSnsChecks') {
     return _webDeleteSnsChecks(payload);
+  }
+
+  // 학원 회신 창구(api/reply.js)만 부르는 둘. 읽기도 POST 로 받는다 —
+  // 부르는 쪽이 POST 로만 오고, 공유키를 URL 쿼리에 실으면 중간 기록에 남는다.
+  if (action === 'getSnsCheckOne') {
+    return _webGetSnsCheckOne(payload);
   }
 
   if (action === 'saveSnsReply') {
