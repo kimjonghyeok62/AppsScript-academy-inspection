@@ -2597,6 +2597,15 @@ function doGet(e) {
     return _webGetSnsChecks();
   }
 
+  // 성과 화면이 읽어 가는 둘 (담당자 화면에서만 부른다)
+  if (action === 'getSurveys') {
+    return _webGetSurveys();
+  }
+
+  if (action === 'getSnapshots') {
+    return _webGetSnapshots();
+  }
+
   if (action === 'fillSnsContacts') {
     try {
       var r = _snsBackfillContacts();
@@ -2638,6 +2647,16 @@ function doPost(e) {
 
   if (action === 'saveSnsReply') {
     return _webSaveSnsReply(payload);
+  }
+
+  // 만족도는 학원 쪽(api/survey.js)에서 오므로 공유키를 요구한다.
+  // 스냅샷은 담당자 화면에서만 부르므로 saveSnsChecks 와 같은 수준으로 둔다.
+  if (action === 'saveSurvey') {
+    return _webSaveSurvey(payload);
+  }
+
+  if (action === 'saveSnapshot') {
+    return _webSaveSnapshot(payload);
   }
 
   return _jsonOut({ ok: false, error: 'unknown action: ' + action });
@@ -3242,6 +3261,166 @@ function _webDeleteSnsChecks(params) {
       if (hit) { sheet.deleteRow(i + 2); deleted++; }
     }
     return _jsonOut({ ok: true, deleted: deleted });
+  } catch (err) {
+    return _jsonOut({ ok: false, error: err.message });
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// 만족도 조사 · 게시율 스냅샷
+// ═══════════════════════════════════════════════════════
+//
+// 두 탭 모두 **쌓기만 하고 고치지 않는다**. SNS게시점검 은 학원 한 곳에 한 줄이라 다시
+// 조사하면 그 칸을 덮어쓴다 — 그래서 '지금 이행률' 은 알아도 '지난달 이행률' 은 어디에도
+// 없다. 게시율이 얼마나 올랐는지 말하려면 그때그때의 판정이 따로 남아 있어야 한다.
+//
+// 만족도를 SNS게시점검 의 열로 넣지 않은 이유도 같다. 만족도는 '학원의 속성' 이 아니라
+// 사건(언제·누가·뭐라고 답했나)이고, 조사는 되풀이된다. 한 학원에 한 줄인 시트에는
+// 두 번째 응답을 담을 자리가 없다.
+//
+// 값은 숫자가 아니라 사람이 읽는 말로 넣는다('많이 도움'). 시트를 열어 그대로 읽혀야 하고,
+// 점수로 바꾸는 표는 앱 한 곳(src/utils/surveyStats.js)에만 둔다.
+
+var SURVEY_SHEET   = '만족도조사';
+var SURVEY_HEADERS = ['응답일시', '구분', '등록번호', '도움정도', '게시표활용', '의견'];
+// 의견 한 칸의 길이 상한 (api/_lib/surveyText.js 의 NOTE_MAX 와 맞출 것)
+var SURVEY_NOTE_MAX = 100;
+
+var SNAPSHOT_SHEET   = '게시율스냅샷';
+var SNAPSHOT_HEADERS = ['저장일시', '회차', '구분', '등록번호', '학원명', '판정', '미이행매체'];
+
+// 한 번에 받는 스냅샷 줄 수 상한 (학원 755 + 교습소 314 + 여유)
+var SNAPSHOT_MAX = 3000;
+
+/**
+ * 이름으로 탭을 얻고, 없으면 헤더와 함께 만든다.
+ *
+ * _snsSheet 처럼 헤더가 바뀌었을 때 옮겨 담지 않는다 — 이 두 탭은 쌓기만 하므로
+ * 열이 바뀔 일이 없고, 그런 날이 오면 그때 손으로 옮기는 편이 안전하다.
+ */
+function _logSheet(name, headers) {
+  var ss = SpreadsheetApp.openById(SNS_SS_ID);
+  var sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    sheet.setFrozenRows(1);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
+  }
+  return sheet;
+}
+
+/** 머리글을 빼고 [{열이름: 값}] 로 */
+function _logRows(sheet, headers) {
+  var last = sheet.getLastRow();
+  if (last < 2) return [];
+  var values = sheet.getRange(2, 1, last - 1, headers.length).getValues();
+  return values.map(function (row) {
+    var o = {};
+    for (var i = 0; i < headers.length; i++) {
+      o[headers[i]] = row[i] instanceof Date
+        ? Utilities.formatDate(row[i], 'Asia/Seoul', "yyyy-MM-dd'T'HH:mm:ss")
+        : String(row[i] === undefined || row[i] === null ? '' : row[i]);
+    }
+    return o;
+  });
+}
+
+/**
+ * 만족도 한 줄.
+ *
+ * 같은 학원이 다시 보내면 줄을 늘리지 않고 덮어쓴다 — 실수로 두 번 누른 것과
+ * 마음이 바뀌어 다시 답한 것을 가릴 수 없으니, 마지막 답을 그 학원의 답으로 본다.
+ * 그래야 응답 곳수가 곧 응답 수가 되어 응답률을 셀 수 있다.
+ */
+function _webSaveSurvey(payload) {
+  try {
+    if (!_replyKeyOk(payload && payload.key)) return _jsonOut({ ok: false, error: 'unauthorized' });
+    var category = String((payload && payload.category) || '').trim();
+    var regNo    = String((payload && payload.regNo) || '').trim();
+    if (!category || !regNo) return _jsonOut({ ok: false, error: 'category·regNo 가 필요합니다' });
+
+    var row = [
+      String((payload && payload.answeredAt) || new Date().toISOString()),
+      category,
+      regNo,
+      String((payload && payload.help) || ''),
+      String((payload && payload.formUse) || ''),
+      String((payload && payload.note) || '').slice(0, SURVEY_NOTE_MAX)
+    ];
+
+    var sheet = _logSheet(SURVEY_SHEET, SURVEY_HEADERS);
+    var last  = sheet.getLastRow();
+    if (last >= 2) {
+      var keys = sheet.getRange(2, 2, last - 1, 2).getValues();
+      for (var i = 0; i < keys.length; i++) {
+        if (_snsKey(keys[i][0], keys[i][1]) !== _snsKey(category, regNo)) continue;
+        sheet.getRange(i + 2, 1, 1, SURVEY_HEADERS.length).setValues([row]);
+        return _jsonOut({ ok: true, row: i + 2, replaced: true });
+      }
+    }
+    sheet.appendRow(row);
+    return _jsonOut({ ok: true, row: sheet.getLastRow(), replaced: false });
+  } catch (err) {
+    return _jsonOut({ ok: false, error: err.message });
+  }
+}
+
+/**
+ * 게시율 스냅샷 한 벌 (1,000줄 남짓).
+ *
+ * 같은 회차가 이미 있으면 그 회차의 줄을 지우고 새로 넣는다 — 담당자가 조사를 조금 더
+ * 손본 뒤 다시 저장하는 일이 흔한데, 그때마다 회차가 둘씩 쌓이면 추이가 엉킨다.
+ */
+function _webSaveSnapshot(payload) {
+  try {
+    var round = String((payload && payload.round) || '').trim();
+    var rows  = (payload && payload.rows) || [];
+    if (!round) return _jsonOut({ ok: false, error: '회차 이름이 필요합니다' });
+    if (!rows.length) return _jsonOut({ ok: false, error: '저장할 줄이 없습니다' });
+    if (rows.length > SNAPSHOT_MAX) return _jsonOut({ ok: false, error: '한 번에 최대 ' + SNAPSHOT_MAX + '줄' });
+
+    var sheet = _logSheet(SNAPSHOT_SHEET, SNAPSHOT_HEADERS);
+
+    // 같은 회차를 먼저 걷어낸다 (아래에서 위로 지워야 행 번호가 밀리지 않는다)
+    var last = sheet.getLastRow();
+    if (last >= 2) {
+      var had = sheet.getRange(2, 2, last - 1, 1).getValues();
+      for (var i = had.length - 1; i >= 0; i--) {
+        if (String(had[i][0]).trim() === round) sheet.deleteRow(i + 2);
+      }
+    }
+
+    var when = String((payload && payload.savedAt) || new Date().toISOString());
+    var body = rows.map(function (r) {
+      return [
+        when,
+        round,
+        String((r && r.category) || ''),
+        String((r && r.regNo) || ''),
+        String((r && r.name) || ''),
+        String((r && r.verdict) || ''),
+        String((r && r.missing) || '')
+      ];
+    });
+    sheet.getRange(sheet.getLastRow() + 1, 1, body.length, SNAPSHOT_HEADERS.length).setValues(body);
+    return _jsonOut({ ok: true, saved: body.length, round: round });
+  } catch (err) {
+    return _jsonOut({ ok: false, error: err.message });
+  }
+}
+
+function _webGetSurveys() {
+  try {
+    return _jsonOut({ ok: true, rows: _logRows(_logSheet(SURVEY_SHEET, SURVEY_HEADERS), SURVEY_HEADERS) });
+  } catch (err) {
+    return _jsonOut({ ok: false, error: err.message });
+  }
+}
+
+function _webGetSnapshots() {
+  try {
+    return _jsonOut({ ok: true, rows: _logRows(_logSheet(SNAPSHOT_SHEET, SNAPSHOT_HEADERS), SNAPSHOT_HEADERS) });
   } catch (err) {
     return _jsonOut({ ok: false, error: err.message });
   }
