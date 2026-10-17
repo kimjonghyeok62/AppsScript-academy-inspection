@@ -108,18 +108,18 @@ const C_ = {
     학원: {
       SS_ID: '158ZNBb88raJ1kzBL3eFcgPZS9CGs5in0YtPtiPWfdic', GID: 1863320151, SHEET: '학원조회',
       NAME: '학원명', REGNO: '등록번호', ADDR: '학원주소', OWNER: '설립자-성명',
-      PHONE: '핸드폰', REG_DATE: '등록일', REG_COL: 9,
+      PHONE: ['휴대폰', '핸드폰'], REG_DATE: '등록일', REG_COL: 9,
     },
     교습소: {
       SS_ID: '158ZNBb88raJ1kzBL3eFcgPZS9CGs5in0YtPtiPWfdic', GID: 1929773080, SHEET: '교습소조회',
       NAME: '교습소명', REGNO: '신고번호', ADDR: '교습소주소', OWNER: '교습자-성명',
-      PHONE: '핸드폰', REG_DATE: '신고일', REG_COL: 5,
+      PHONE: ['휴대폰', '핸드폰'], REG_DATE: '신고일', REG_COL: 5,
       STATUS: '등록상태', STATUS_OK: '개원',
     },
     개인과외: {
       SS_ID: '158ZNBb88raJ1kzBL3eFcgPZS9CGs5in0YtPtiPWfdic', GID: 482385921, SHEET: '개인과외조회',
       NAME: '교습자명', REGNO: '신고번호', ADDR: '교습장소', OWNER: '성명',
-      PHONE: '핸드폰', REG_DATE: '신고일', REG_COL: 6,
+      PHONE: ['휴대폰', '핸드폰'], REG_DATE: '신고일', REG_COL: 6,
     },
   },
 
@@ -1496,7 +1496,7 @@ const _Master = {
 
   info(type, name) {
     const cache = CacheService.getScriptCache();
-    const key   = `MI_v3_${type}_${_U.norm(name)}`;
+    const key   = `MI_v4_${type}_${_U.norm(name)}`;
     const hit   = cache.get(key);
     if (hit) return JSON.parse(hit);
 
@@ -1512,7 +1512,11 @@ const _Master = {
 
     const hdr    = sh.getRange(1, 1, 1, sh.getLastColumn()).getDisplayValues()[0]
                      .map(x => String(x || '').trim());
-    const getIdx = (n) => { const i = hdr.indexOf(n); return i !== -1 ? i + 1 : -1; };
+    // n 이 배열이면 앞에서부터 먼저 찾은 헤더를 쓴다 (원본 시트 헤더명이 바뀌어도 대응)
+    const getIdx = (n) => {
+      const i = [].concat(n).map(k => hdr.indexOf(k)).find(j => j !== -1) ?? -1;
+      return i !== -1 ? i + 1 : -1;
+    };
     const idx    = {
       name:  getIdx(conf.NAME),
       regno: getIdx(conf.REGNO),
@@ -2371,7 +2375,7 @@ function _batchLoadMaster() {
 
     const hdr    = sh.getRange(1, 1, 1, sh.getLastColumn()).getDisplayValues()[0]
                      .map(x => String(x || '').trim());
-    const getIdx = name => { const i = hdr.indexOf(name); return i !== -1 ? i : -1; };
+    const getIdx = name => [].concat(name).map(k => hdr.indexOf(k)).find(j => j !== -1) ?? -1;
     const idx    = {
       name:  getIdx(conf.NAME),
       regno: getIdx(conf.REGNO),
