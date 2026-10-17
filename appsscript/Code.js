@@ -828,7 +828,6 @@ const _Edit = {
 
   _fillInfo(sh, row, type, name) {
     const C   = C_.COL;
-    const DIM = C_.STYLE.DIM_COLOR;
     _U.toast('검색 중…', '조회중', 4);
     const t0   = Date.now();
     const info = _Master.info(type, name);
@@ -846,13 +845,15 @@ const _Edit = {
         sh.getRange(row, C.등록번호).setValue(info.regno || '');
         if (dong) sh.getRange(row, C.주소동).setValue(dong);
       } else {
-        sh.getRange(row, C.등록번호).setValue(info.regno || '').setFontColor(DIM);
-        if (dong) sh.getRange(row, C.주소동).setValue(dong).setFontColor(DIM);
+        // 같은 묶음 2번째 행부터는 글자색 = 배경색 (applyGroupStyle 과 같게)
+        sh.getRange(row, C.등록번호).setValue(info.regno || '').setFontColor(bgColor);
+        if (dong) sh.getRange(row, C.주소동).setValue(dong).setFontColor(bgColor);
       }
 
       if (info.owner) sh.getRange(row, C.운영자).setValue(info.owner);
       if (info.phone) {
         sh.getRange(row, C.연락처).setRichTextValue(_U.feeRichText(info.phone, name, type));
+        if (!isFirst) _U.hideJColRichText(sh, row, 1, bgColor);
       }
     } else {
       sh.getRange(row, C.등록번호, 1, 6).clearContent();
@@ -2280,7 +2281,6 @@ function batchFillByName() {
   const histMap     = _batchLoadAllHistory();
   const fbMap       = _batchLoadAllFallback();
 
-  const DIM         = C_.STYLE.DIM_COLOR;
   let successCount  = 0;
   let failCount     = 0;
   const failNames   = [];
@@ -2308,12 +2308,16 @@ function batchFillByName() {
       sh.getRange(t.row, C.등록번호).setValue(info.regno || '');
       if (dong) sh.getRange(t.row, C.주소동).setValue(dong);
     } else {
-      sh.getRange(t.row, C.등록번호).setValue(info.regno || '').setFontColor(DIM);
-      if (dong) sh.getRange(t.row, C.주소동).setValue(dong).setFontColor(DIM);
+      // 같은 묶음 2번째 행부터는 글자색 = 배경색 (applyGroupStyle 과 같게)
+      sh.getRange(t.row, C.등록번호).setValue(info.regno || '').setFontColor(textColor);
+      if (dong) sh.getRange(t.row, C.주소동).setValue(dong).setFontColor(textColor);
     }
 
     if (info.owner) sh.getRange(t.row, C.운영자).setValue(info.owner);
-    if (info.phone) sh.getRange(t.row, C.연락처).setRichTextValue(_U.feeRichText(info.phone, t.name, t.type));
+    if (info.phone) {
+      sh.getRange(t.row, C.연락처).setRichTextValue(_U.feeRichText(info.phone, t.name, t.type));
+      if (!isFirst) _U.hideJColRichText(sh, t.row, 1, textColor);
+    }
 
     const refDateRaw = (dateVal instanceof Date && !isNaN(dateVal.getTime())) ? dateVal : new Date();
     const refTime    = new Date(refDateRaw.getFullYear(), refDateRaw.getMonth(), refDateRaw.getDate()).getTime();
