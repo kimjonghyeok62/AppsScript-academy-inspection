@@ -130,6 +130,16 @@ const C_ = {
     COL_DATE: 2,
   },
 
+  // 지도점검목록(도교육청 제출용) — '학원, 교습소' 탭
+  SUBMIT: {
+    SS_ID: '1DMxJbfjCz0KK7cH221gyhwSPxcQps073X4WsLtXsIvM',
+    GID:   0,
+    SHEET: '학원, 교습소',
+    YEAR:  2026,   // 점검일이 '9.22' 처럼 연도 없이 적혀 있다
+    COL:   { 연번: 1, 점검일: 2, 구분: 4, 명칭: 5, 목적: 6, 처분: 7, 위반내용: 8,
+             과태료부과일: 9, 사전의견: 10, 처분일: 11, 과태료: 12 },
+  },
+
   HIST: {
     SS_ID: '1xxaBOZMuLqozEm10f4lXnme_ARLfRHzGcsk5QlqoYKI',
     IDX:   '__HIST_INDEX__',
@@ -446,6 +456,13 @@ function sortAndApplyStyle() {
   }
 
   _U.toast('데이터 정리 및 스타일 적용 중...', '⏳', 5);
+  _sortAndStyle(sh);
+  _U.toast('재정렬 및 스타일 적용이 완료되었습니다.', '✨ 완료', 4);
+}
+
+// 재정렬 + 링크 + 열 너비·행 높이 (확인창 없음 — 불러오기에서도 쓴다)
+function _sortAndStyle(sh) {
+  const start = C_.START_ROW;
 
   // 1. 재정렬 수행 (내부 확인창 중복을 피하기 위해 false 전달)
   // (정렬 로직 내부에서 _Style.applyAll()이 자동으로 함께 호출됩니다)
@@ -458,12 +475,11 @@ function sortAndApplyStyle() {
   applyFeeLinksToAll(false);
 
   // 3. 열 너비 및 행 높이 규격 강제 적용
+  const n = Math.max(_U.lastDataRow(sh), start) - start + 1;
   _applyColWidths(sh);
   sh.setRowHeights(start, n, 37);
   SpreadsheetApp.flush();
   sh.setRowHeights(start, n, 37);
-
-  _U.toast('재정렬 및 스타일 적용이 완료되었습니다.', '✨ 완료', 4);
 }
 
 // ═══════════════════════════════════════════════════════
@@ -590,6 +606,7 @@ function onOpen() {
     .addItem('🎨 지금 바로 재정렬 및 스타일 적용', 'sortAndApplyStyle')
     .addItem('📅 캘린더 일정 반영', 'syncCalendar')
     .addItem('📊 학원,교습소,개인과외 통계 생성', 'buildCombinedStatSheet')
+    .addItem('📥 지도점검목록(도교육청 제출용) 불러오기', 'importSubmittedList')
     .addSeparator()
     .addItem('🔄 점검이력 인덱스 갱신', 'rebuildHistoryIndex')
     .addItem('📞 SNS게시점검 연락처 채우기', 'fillSnsContacts')
@@ -2244,7 +2261,7 @@ function batchFillByName() {
     const isMissing = !regnoVals[i].trim() || !addrVals[i].trim();
     if (!isMissing) continue;
 
-    targets.push({ rowIdx: i, row: start + i, name, type: tipo });
+    targets.push({ rowIdx: i, row: start + i, name, type: tipo, date: dateVals[i], bg: bgColors[i] });
   }
 
   const ui  = SpreadsheetApp.getUi();
@@ -2277,12 +2294,27 @@ function batchFillByName() {
 
   _U.toast(`조회 중... 외부 시트 데이터를 한 번에 불러옵니다. (${targets.length}건)`, '🚀 초고속 검색', 10);
 
+  const { successCount, failNames } = _fillByName(sh, targets);
+  const failCount = failNames.length;
+
+  let msg = `완료: ${successCount}건 채움`;
+  if (failCount > 0) {
+    const preview = failNames.slice(0, 5).join(', ');
+    const more    = failNames.length > 5 ? ` 외 ${failNames.length - 5}건` : '';
+    msg += `\n미발견: ${failCount}건 (${preview}${more})`;
+  }
+  _U.toast(msg, '🚀 검색 완료', 8);
+}
+
+// 명칭으로 마스터를 찾아 등록번호·주소·주소(동)·운영자·연락처·미점검기간을 채운다.
+// targets: [{ row, name, type, date, bg, isFirst? }] — isFirst 를 주면 위 행을 다시 읽지 않는다
+function _fillByName(sh, targets) {
+  const C           = C_.COL;
   const masterCache = _batchLoadMaster();
   const histMap     = _batchLoadAllHistory();
   const fbMap       = _batchLoadAllFallback();
 
   let successCount  = 0;
-  let failCount     = 0;
   const failNames   = [];
 
   for (const t of targets) {
@@ -2291,16 +2323,15 @@ function batchFillByName() {
     const info = map ? (map.get(norm) || null) : null;
 
     if (!info) {
-      failCount++;
       failNames.push(`${t.name}(${t.type})`);
       continue;
     }
 
-    const dateVal     = dateVals[t.rowIdx];
-    const isFirst     = !_U.hasSameGroupAbove(sh, t.row, dateVal, t.name);
+    const dateVal     = t.date;
+    const isFirst     = t.isFirst !== undefined ? t.isFirst : !_U.hasSameGroupAbove(sh, t.row, dateVal, t.name);
     const dong        = _U.extractDong(info.addr);
     const trimmedAddr = _U.trimHanamAddr(info.addr);
-    const textColor   = isFirst ? '#000000' : bgColors[t.rowIdx];
+    const textColor   = isFirst ? '#000000' : t.bg;
 
     sh.getRange(t.row, C.주소).setRichTextValue(_U.naverAddrRichText(trimmedAddr, t.name, t.type, textColor));
 
@@ -2348,15 +2379,303 @@ function batchFillByName() {
 
   SpreadsheetApp.flush();
   _U.applyJWrap(sh);
-
-  let msg = `완료: ${successCount}건 채움`;
-  if (failCount > 0) {
-    const preview = failNames.slice(0, 5).join(', ');
-    const more    = failNames.length > 5 ? ` 외 ${failNames.length - 5}건` : '';
-    msg += `\n미발견: ${failCount}건 (${preview}${more})`;
-  }
-  _U.toast(msg, '🚀 검색 완료', 8);
+  return { successCount, failNames };
 }
+
+
+// ═══════════════════════════════════════════════════════
+// ★ 공개 함수 — 지도점검목록(도교육청 제출용) 불러오기
+// ═══════════════════════════════════════════════════════
+// 제출용에만 있는 점검을 대장에 옮긴다.
+//  · 새 행 = 연번이 대장에 없고, 같은 점검일·명칭도 대장에 없는 행
+//    (같은 날 안 순서가 두 자료에서 달라 연번만으로는 같은 점검인지 알 수 없고,
+//     명칭 표기·점검일이 조금씩 다른 옛 행이 있어 점검일+명칭만으로도 부족하다)
+//  · 위반내용은 행정처분기준에서 가장 비슷한 항목을 고르되, 행정처분·과태료가
+//    제출용과 맞는 항목을 우선한다. 끝내 안 맞으면 제출용 값을 그대로 쓰고 팝업으로 알린다.
+//  · 옮긴 뒤 명칭 검색 → 재정렬·스타일 적용까지 이어서 한다.
+function importSubmittedList() {
+  const sh = _U.sh(C_.SHEET.MAIN);
+  const ui = SpreadsheetApp.getUi();
+  const C  = C_.COL;
+
+  _U.toast('제출용 자료를 읽는 중…', '📥', 5);
+  const src  = _Submit.readSource();
+  const have = _Submit.existing(sh);
+
+  const todo = [], badDate = [];
+  src.forEach(r => {
+    if (have.serials.has(String(r.serial))) return;
+    if (!r.date) { badDate.push(`${r.serial} ${r.name} (점검일 '${r.dateText}')`); return; }
+    if (have.keys.has(_Submit.key(r.date, r.name))) return;
+    todo.push(r);
+  });
+
+  if (!todo.length) {
+    ui.alert('📥 불러오기', '새로 가져올 점검이 없습니다.' +
+      (badDate.length ? `\n\n점검일을 읽지 못한 행:\n${badDate.join('\n')}` : ''), ui.ButtonSet.OK);
+    return;
+  }
+
+  const serials = [...new Set(todo.map(r => r.serial))];
+  const res = ui.alert(
+    '📥 지도점검목록(도교육청 제출용) 불러오기',
+    [
+      `제출용에만 있는 점검을 대장에 추가합니다.`,
+      ``,
+      `  • 연번 ${serials[0]} ~ ${serials[serials.length - 1]} (${serials.length}곳, ${todo.length}행)`,
+      `  • 추가한 뒤 명칭 검색 → 재정렬 및 스타일 적용까지 이어서 합니다.`,
+      ``,
+      `계속하시겠습니까?`,
+    ].join('\n'),
+    ui.ButtonSet.YES_NO
+  );
+  if (res !== ui.Button.YES) {
+    _U.toast('취소되었습니다.', '❌', 3);
+    return;
+  }
+
+  // 1) 대장에 쓸 행 만들기
+  const crit     = _Submit.criteria();
+  const mismatch = [];
+  const rows = todo.map(r => {
+    const out = new Array(C.처분일).fill('');
+    out[C.연번 - 1]   = Number(r.serial) || r.serial;
+    out[C.시작일 - 1] = r.date;
+    out[C.구분 - 1]   = r.type;
+    out[C.목적 - 1]   = _Submit.purpose(r.purpose);
+    out[C.명칭 - 1]   = r.name;
+
+    const v = _Submit.violation(crit, r);
+    out[C.위반내용 - 1] = v.item;
+    out[C.행정처분 - 1] = v.sanction;
+    out[C.과태료 - 1]   = v.fine;
+    if (v.note) mismatch.push(`${r.serial} ${r.name}: ${v.note}`);
+
+    out[C.과태료부과일 - 1] = _Submit.toDate(r.feeDate);
+    out[C.사전의견 - 1]     = _Submit.toDate(r.hearing);
+    out[C.처분일 - 1]       = _Submit.toDate(r.sanctionDate);
+    return out;
+  });
+
+  // 2) 날짜 있는 마지막 행 아래(날짜 없는 대기 행 위)에 끼워 넣기
+  const at    = _Submit.lastDatedRow(sh);
+  const first = at + 1;
+  sh.insertRowsAfter(at, rows.length);
+  sh.getRange(first, 1, rows.length, rows[0].length).setValues(rows);
+  CacheService.getScriptCache().remove('VAL_VER');
+  _DV.applyAll(sh, first, first + rows.length - 1);
+  SpreadsheetApp.flush();
+
+  // 3) 명칭 검색 (가져온 행만)
+  _U.toast(`명칭 검색 중… (${rows.length}행)`, '🔍', 10);
+  const bgs = sh.getRange(first, C.주소, rows.length, 1).getBackgrounds().flat();
+  const targets = [];
+  rows.forEach((r, i) => {
+    const type = r[C.구분 - 1];
+    if (!r[C.명칭 - 1] || type === '개인과외') return;
+    const prev = rows[i - 1];
+    const isFirst = !prev || _Submit.key(prev[C.시작일 - 1], prev[C.명칭 - 1]) !== _Submit.key(r[C.시작일 - 1], r[C.명칭 - 1]);
+    targets.push({ row: first + i, name: r[C.명칭 - 1], type, date: r[C.시작일 - 1], bg: bgs[i], isFirst });
+  });
+  const fill = _fillByName(sh, targets);
+
+  // 4) 재정렬 및 스타일 적용
+  _U.toast('재정렬 및 스타일 적용 중…', '⏳', 10);
+  _sortAndStyle(sh);
+
+  // 5) 결과
+  const lines = [`${serials.length}곳 ${rows.length}행을 추가했습니다.`];
+  if (mismatch.length) {
+    lines.push('', `⚠️ 위반내용 확인 필요 (${mismatch.length}건)`,
+      '행정처분·과태료가 맞는 기준 항목을 찾지 못해, 가장 비슷한 항목을 고르고 행정처분·과태료는 제출용 값을 그대로 적었습니다.',
+      ...mismatch);
+  }
+  const failNames = [...new Set(fill.failNames)];
+  if (failNames.length) {
+    lines.push('', `⚠️ 명칭 검색 실패 (${failNames.length}곳) — 마스터에서 명칭을 찾지 못했습니다.`, ...failNames);
+  }
+  if (badDate.length) {
+    lines.push('', `⚠️ 점검일을 읽지 못해 건너뜀 (${badDate.length}행)`, ...badDate);
+  }
+  ui.alert('📥 불러오기 완료', lines.join('\n'), ui.ButtonSet.OK);
+}
+
+
+// ═══════════════════════════════════════════════════════
+// 내부 모듈 — 제출용 불러오기 (_Submit)
+// ═══════════════════════════════════════════════════════
+const _Submit = {
+
+  readSource() {
+    const S  = C_.SUBMIT;
+    const ss = SpreadsheetApp.openById(S.SS_ID);
+    const sh = ss.getSheets().find(s => s.getSheetId() == S.GID) || ss.getSheetByName(S.SHEET);
+    if (!sh) throw new Error(`제출용 시트 없음 (${S.SHEET})`);
+    const last = sh.getLastRow();
+    if (last < 2) return [];
+
+    const K    = S.COL;
+    const vals = sh.getRange(2, 1, last - 1, K.과태료).getDisplayValues();
+    const cell = (row, c) => String(row[c - 1] || '').trim();
+    return vals
+      .filter(row => cell(row, K.연번) && cell(row, K.명칭))
+      .map(row => ({
+        serial:       cell(row, K.연번),
+        dateText:     cell(row, K.점검일),
+        date:         _Submit.parseDay(cell(row, K.점검일)),
+        type:         cell(row, K.구분),
+        name:         cell(row, K.명칭),
+        purpose:      cell(row, K.목적),
+        disposal:     cell(row, K.처분),
+        violation:    cell(row, K.위반내용),
+        feeDate:      cell(row, K.과태료부과일),
+        hearing:      cell(row, K.사전의견),
+        sanctionDate: cell(row, K.처분일),
+        fineWon:      cell(row, K.과태료),
+      }));
+  },
+
+  // 대장에 이미 있는 연번과 점검일+명칭
+  existing(sh) {
+    const C     = C_.COL;
+    const start = C_.START_ROW;
+    const last  = Math.max(_U.lastDataRow(sh), start);
+    const n     = last - start + 1;
+    const serials = new Set(sh.getRange(start, C.연번, n, 1).getDisplayValues().flat()
+      .map(v => String(v).trim()).filter(Boolean));
+    const dates = sh.getRange(start, C.시작일, n, 1).getValues().flat();
+    const names = sh.getRange(start, C.명칭,   n, 1).getDisplayValues().flat();
+    const keys  = new Set();
+    dates.forEach((d, i) => {
+      if (d instanceof Date && !isNaN(d.getTime()) && names[i]) keys.add(_Submit.key(d, names[i]));
+    });
+    return { serials, keys };
+  },
+
+  key(d, name) {
+    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}|${_U.norm(name)}`;
+  },
+
+  // '9.22', '5.19.', '2026. 9. 22', '04-02' → Date
+  parseDay(s) {
+    const m = String(s || '').match(/(?:(\d{4})\D+)?(\d{1,2})\s*[.\-\/월]\s*(\d{1,2})\s*[.일]?\s*$/);
+    if (!m) return null;
+    const y = m[1] ? Number(m[1]) : C_.SUBMIT.YEAR;
+    const d = new Date(y, Number(m[2]) - 1, Number(m[3]));
+    return isNaN(d.getTime()) ? null : d;
+  },
+
+  // '2026-09-30', '2026-10-16까지' → Date, '해당없음'·빈칸 → ''
+  toDate(s) {
+    const m = String(s || '').match(/(\d{4})\D+(\d{1,2})\D+(\d{1,2})/);
+    return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : '';
+  },
+
+  purpose(s) {
+    const t = String(s || '');
+    if (/교습시간/.test(t))        return '교습시간점검';
+    if (/국민신문고/.test(t))      return '국민신문고';
+    if (/불법사교육/.test(t))      return '불법사교육';
+    if (/특별|물가/.test(t))       return '특별점검';
+    if (/정기|일반|자율/.test(t))  return '일반점검';
+    if (/민원/.test(t))            return '기타민원';
+    return t;
+  },
+
+  // 행정처분기준: [{ type, item, name, sanction, fine(만원, 없으면 0) }]
+  criteria() {
+    const vals = _U.sh(C_.SHEET.기준).getDataRange().getValues();
+    const out  = [];
+    for (let r = 1; r < vals.length; r++) {
+      const type = String(vals[r][0] || '').trim();
+      const code = String(vals[r][1] || '').trim();
+      const name = String(vals[r][2] || '').trim();
+      if (!type || !name) continue;
+      out.push({
+        type, name,
+        item:     code ? `${code} ${name}` : name,
+        sanction: String(vals[r][3] || '').trim(),
+        fine:     Number(String(vals[r][4] ?? '').replace(/[^0-9]/g, '')) || 0,
+      });
+    }
+    return out;
+  },
+
+  // 제출용 한 행 → { item, sanction, fine, note }  (note 가 있으면 팝업에 띄운다)
+  violation(crit, r) {
+    const parts   = r.disposal.split(',').map(s => s.trim()).filter(Boolean);
+    const hasFine = parts.includes('과태료');
+    const expSanc = parts.find(p => p !== '과태료') || '';
+    const won     = Number(r.fineWon.replace(/[^0-9]/g, '')) || 0;
+    const expFine = won ? won / 10000 : 0;   // 제출용은 원, 대장은 만원
+
+    if (!r.violation) {
+      if (expSanc === '정상운영') return { item: C_.DONE_KEYWORD, sanction: '없음', fine: '없음' };
+      return { item: '', sanction: expSanc, fine: expFine || '', note: '' };
+    }
+
+    const p = _Submit._prep(r.violation);
+    const cands = crit.filter(c => c.type === r.type)
+      .map(c => ({ c, score: _Submit._similar(p, _Submit._prep(c.name)) }))
+      .sort((a, b) => b.score - a.score);
+    if (!cands.length) {
+      return { item: '', sanction: expSanc, fine: expFine || '없음', note: `'${r.violation}' — 기준표에 '${r.type}' 항목이 없음` };
+    }
+
+    // 행정처분·과태료가 제출용과 같은 항목만 '맞음'
+    const fits = c => c.sanction === expSanc &&
+      (expFine ? c.fine === expFine : (hasFine ? c.fine > 0 : c.fine === 0));
+    // 글자가 꽤 비슷하고, 1등과 너무 벌어지지 않은 것 중에서 맞는 항목을 고른다
+    const top = cands[0].score;
+    const hit = cands.find(x => x.score >= 0.2 && x.score >= top - 0.25 && fits(x.c));
+    if (hit) return { item: hit.c.item, sanction: hit.c.sanction, fine: hit.c.fine || '없음' };
+
+    const best = cands[0].c;
+    const fmt  = (s, f) => `${s || '-'}/${f ? f + '만원' : '과태료 없음'}`;
+    return {
+      item: best.item, sanction: expSanc, fine: expFine || '없음',
+      note: `'${r.violation}' → '${best.item}' (제출용 ${fmt(expSanc, expFine)}, 기준 ${fmt(best.sanction, best.fine)})`,
+    };
+  },
+
+  // 같은 뜻 다른 말을 한쪽으로 모은다
+  _prep(s) {
+    let t = _U.norm(s);
+    [
+      [/허위|거짓/g, '거짓'], [/과장|과대/g, '과대'],
+      [/미실시|미조회|조회안함/g, '미조회'], [/경력조회|범죄경력/g, '경력'],
+      [/채용|해임|변경/g, '변경'], [/표시사항미표시|미기재|미표시/g, '미표시'],
+    ].forEach(([a, b]) => { t = t.replace(a, b); });
+    return t;
+  },
+
+  // 두 글자씩 끊어 겹치는 정도 (Dice 와 '제출용 문구가 기준에 얼마나 들어 있나'의 평균)
+  _similar(a, b) {
+    const grams = s => {
+      const m = new Map();
+      for (let i = 0; i < s.length - 1; i++) { const k = s.substr(i, 2); m.set(k, (m.get(k) || 0) + 1); }
+      return m;
+    };
+    const A = grams(a), B = grams(b);
+    let inter = 0, na = 0, nb = 0;
+    A.forEach(v => { na += v; });
+    B.forEach(v => { nb += v; });
+    A.forEach((v, k) => { if (B.has(k)) inter += Math.min(v, B.get(k)); });
+    if (!na || !nb) return 0;
+    return 0.5 * (2 * inter / (na + nb)) + 0.5 * (inter / na);
+  },
+
+  // 시작일이 날짜인 마지막 행 (없으면 머리글 행)
+  lastDatedRow(sh) {
+    const start = C_.START_ROW;
+    const last  = Math.max(_U.lastDataRow(sh), start);
+    const dates = sh.getRange(start, C_.COL.시작일, last - start + 1, 1).getValues().flat();
+    for (let i = dates.length - 1; i >= 0; i--) {
+      if (dates[i] instanceof Date && !isNaN(dates[i].getTime())) return start + i;
+    }
+    return start - 1;
+  },
+};
 
 
 // ═══════════════════════════════════════════════════════
