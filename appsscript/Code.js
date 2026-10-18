@@ -2993,6 +2993,10 @@ function doPost(e) {
     return _webSaveSnapshot(payload);
   }
 
+  if (action === 'deleteSnapshotRound') {
+    return _webDeleteSnapshotRound(payload);
+  }
+
   return _jsonOut({ ok: false, error: 'unknown action: ' + action });
 }
 
@@ -3637,11 +3641,26 @@ function _logSheet(name, headers) {
   var sheet = ss.getSheetByName(name);
   if (!sheet) {
     sheet = ss.insertSheet(name);
+    // 넣기 전에 글자 서식으로 못 박는다 — 그러지 않으면 회차 이름과 응답일시를 시트가
+    // 날짜로 바꿔 버려, 우리가 적은 것과 읽는 것이 달라진다
+    sheet.getRange(1, 1, sheet.getMaxRows(), headers.length).setNumberFormat('@');
     sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
     sheet.setFrozenRows(1);
     sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold');
   }
   return sheet;
+}
+
+/**
+ * 칸 하나를 글자로.
+ *
+ * 시트는 '2026년 9월 8일' 같은 것을 **날짜로 바꿔** 넣는다. 그러면 회차 이름이 우리가 적은
+ * 것과 달라지고, 같은 이름으로 다시 저장할 때 못 알아봐 회차가 둘씩 쌓인다.
+ * 넣을 때는 칸 서식을 글자로 두어 막고, 읽을 때는 이미 날짜가 된 옛 값도 여기서 갈무리한다.
+ */
+function _cellText(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Seoul', "yyyy-MM-dd'T'HH:mm:ss");
+  return String(v === undefined || v === null ? '' : v);
 }
 
 /** 머리글을 빼고 [{열이름: 값}] 로 */
@@ -3651,11 +3670,7 @@ function _logRows(sheet, headers) {
   var values = sheet.getRange(2, 1, last - 1, headers.length).getValues();
   return values.map(function (row) {
     var o = {};
-    for (var i = 0; i < headers.length; i++) {
-      o[headers[i]] = row[i] instanceof Date
-        ? Utilities.formatDate(row[i], 'Asia/Seoul', "yyyy-MM-dd'T'HH:mm:ss")
-        : String(row[i] === undefined || row[i] === null ? '' : row[i]);
-    }
+    for (var i = 0; i < headers.length; i++) o[headers[i]] = _cellText(row[i]);
     return o;
   });
 }
@@ -3688,16 +3703,39 @@ function _webSaveSurvey(payload) {
     if (last >= 2) {
       var keys = sheet.getRange(2, 2, last - 1, 2).getValues();
       for (var i = 0; i < keys.length; i++) {
-        if (_snsKey(keys[i][0], keys[i][1]) !== _snsKey(category, regNo)) continue;
-        sheet.getRange(i + 2, 1, 1, SURVEY_HEADERS.length).setValues([row]);
+        if (_snsKey(_cellText(keys[i][0]), _cellText(keys[i][1])) !== _snsKey(category, regNo)) continue;
+        sheet.getRange(i + 2, 1, 1, SURVEY_HEADERS.length).setNumberFormat('@').setValues([row]);
         return _jsonOut({ ok: true, row: i + 2, replaced: true });
       }
     }
     sheet.appendRow(row);
+    sheet.getRange(sheet.getLastRow(), 1, 1, SURVEY_HEADERS.length).setNumberFormat('@');
     return _jsonOut({ ok: true, row: sheet.getLastRow(), replaced: false });
   } catch (err) {
     return _jsonOut({ ok: false, error: err.message });
   }
+}
+
+/**
+ * 그 회차의 줄을 걷어낸다.
+ *
+ * deleteRow 를 줄마다 부르지 않는다 — 1,069줄이면 6분 제한에 걸려 지우다 만다(실제로 그랬다).
+ * 남길 줄만 골라 한 번에 다시 쓰면 API 를 세 번만 부른다.
+ */
+function _snapshotDropRound(sheet, round) {
+  var last = sheet.getLastRow();
+  if (last < 2) return 0;
+  var width = SNAPSHOT_HEADERS.length;
+  var rows = sheet.getRange(2, 1, last - 1, width).getValues();
+  var keep = rows.filter(function (r) { return _cellText(r[1]).trim() !== round; });
+  var dropped = rows.length - keep.length;
+  if (!dropped) return 0;
+
+  sheet.getRange(2, 1, rows.length, width).clearContent();
+  if (keep.length) {
+    sheet.getRange(2, 1, keep.length, width).setNumberFormat('@').setValues(keep);
+  }
+  return dropped;
 }
 
 /**
@@ -3716,14 +3754,7 @@ function _webSaveSnapshot(payload) {
 
     var sheet = _logSheet(SNAPSHOT_SHEET, SNAPSHOT_HEADERS);
 
-    // 같은 회차를 먼저 걷어낸다 (아래에서 위로 지워야 행 번호가 밀리지 않는다)
-    var last = sheet.getLastRow();
-    if (last >= 2) {
-      var had = sheet.getRange(2, 2, last - 1, 1).getValues();
-      for (var i = had.length - 1; i >= 0; i--) {
-        if (String(had[i][0]).trim() === round) sheet.deleteRow(i + 2);
-      }
-    }
+    _snapshotDropRound(sheet, round);   // 같은 회차를 먼저 걷어낸다
 
     var when = String((payload && payload.savedAt) || new Date().toISOString());
     var body = rows.map(function (r) {
@@ -3737,8 +3768,23 @@ function _webSaveSnapshot(payload) {
         String((r && r.missing) || '')
       ];
     });
-    sheet.getRange(sheet.getLastRow() + 1, 1, body.length, SNAPSHOT_HEADERS.length).setValues(body);
+    sheet.getRange(sheet.getLastRow() + 1, 1, body.length, SNAPSHOT_HEADERS.length)
+      .setNumberFormat('@')
+      .setValues(body);
     return _jsonOut({ ok: true, saved: body.length, round: round });
+  } catch (err) {
+    return _jsonOut({ ok: false, error: err.message });
+  }
+}
+
+/** 회차 하나를 통째로 지운다 (이름을 잘못 적었거나 시험 삼아 저장한 것) */
+function _webDeleteSnapshotRound(payload) {
+  try {
+    var round = String((payload && payload.round) || '').trim();
+    if (!round) return _jsonOut({ ok: false, error: '\ud68c\ucc28 \uc774\ub984\uc774 \ud544\uc694\ud569\ub2c8\ub2e4' });
+
+    var sheet = _logSheet(SNAPSHOT_SHEET, SNAPSHOT_HEADERS);
+    return _jsonOut({ ok: true, deleted: _snapshotDropRound(sheet, round) });
   } catch (err) {
     return _jsonOut({ ok: false, error: err.message });
   }
