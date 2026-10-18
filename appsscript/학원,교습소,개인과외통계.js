@@ -320,6 +320,7 @@ const _CombStat2 = {
       n,
       dateVals:  col(vals, C.시작일),
       typeVals:  col(disp, C.구분),
+      purpVals:  col(disp, C.목적),
       nameVals:  col(disp, C.명칭),
       violVals:  col(disp, C.위반내용),
       guideVals: col(disp, C.지도내용),
@@ -332,7 +333,7 @@ const _CombStat2 = {
   // ─── 메인 시트 데이터 수집 ───────────────────────────────
   collectData(raw) {
     if (!raw) return [];
-    const { n, dateVals, typeVals, nameVals, violVals, guideVals, sanctVals, noteVals, fineVals } = raw;
+    const { n, dateVals, typeVals, purpVals, nameVals, violVals, guideVals, sanctVals, noteVals, fineVals } = raw;
 
     const codeMap       = _CombStat2.buildCodeToItemMap();
     const rows          = [];
@@ -370,18 +371,19 @@ const _CombStat2 = {
         const cleaned = fine.replace(/[^0-9.]/g, '');
         const num     = parseFloat(cleaned);
         if (!isNaN(num) && num > 0) {
-          // 이미 천원 단위인지 확인 (값이 크면 원 단위로 간주)
-          fineAmt = num >= 10000 ? Math.round(num / 1000) : num;
+          // 대장 과태료 열은 만원 단위(50 = 50만원) → 천원으로 ×10
+          // (값이 크면 원 단위로 적힌 것으로 보고 ÷1000)
+          fineAmt = num >= 10000 ? Math.round(num / 1000) : Math.round(num * 10);
         }
       }
 
-      // 같은 날+같은 학원 = 같은 점검 그룹
-      const dk       = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
-      const groupKey = `${dk}|${name}`;
+      // 같은 날 + 같은 학원 + 같은 점검목적 = 한 번의 점검 (대장 연번과 같은 기준)
+      const purpose  = String(purpVals[i] || '').trim();
+      const groupKey = _U.visitKey(date, name, purpose);
       const isFirst  = !visitedGroup.has(groupKey);
       if (isFirst) visitedGroup.add(groupKey);
 
-      rows.push({ date, type, name, viol, violCode, guide, sanct, note, fineAmt, isFirst });
+      rows.push({ date, type, name, purpose, viol, violCode, guide, sanct, note, fineAmt, isFirst });
     }
     return rows;
   },
@@ -697,8 +699,7 @@ const _CombStat2 = {
     const caughtGK  = new Set();
 
     for (const r of weekRows) {
-      const dk = `${r.date.getFullYear()}-${r.date.getMonth()}-${r.date.getDate()}`;
-      const gk = `${dk}|${r.name}`;
+      const gk = _U.visitKey(r.date, r.name, r.purpose);
 
       if (r.isFirst && !checkedGK.has(gk)) {
         checkedGK.add(gk);
