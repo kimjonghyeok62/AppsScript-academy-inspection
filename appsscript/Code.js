@@ -809,8 +809,7 @@ const _Edit = {
       const schedule = String(row[C_.COL.예약일정 - 1] || '').trim();
       if (!(dv instanceof Date) || isNaN(dv.getTime())) return null;
       if (schedule.includes('자율점검대상')) return null;
-      const dk  = `${dv.getFullYear()}-${dv.getMonth()}-${dv.getDate()}`;
-      const key = name ? `${dk}|${name}` : `${dk}|__noname__${serial}`;
+      const key = name ? _U.visitKey(dv, name, row[C_.COL.목적 - 1]) : `${_U.visitKey(dv, '', '')}__noname__${serial}`;
       if (!keyMap.has(key)) { serial++; keyMap.set(key, serial); }
       return keyMap.get(key);
     });
@@ -978,11 +977,11 @@ const _Style = {
     const name    = String(sh.getRange(row, C.명칭).getDisplayValue() || '').trim();
     if (!(dateVal instanceof Date) || !name) return;
 
-    const dk       = `${dateVal.getFullYear()}-${dateVal.getMonth()}-${dateVal.getDate()}`;
-    const groupKey = `${dk}|${name}`;
+    const groupKey = _U.visitKey(dateVal, name, sh.getRange(row, C.목적).getDisplayValue());
 
     const dates  = sh.getRange(start, C.시작일,   n, 1).getValues().flat();
     const names  = sh.getRange(start, C.명칭,     n, 1).getDisplayValues().flat();
+    const purps  = sh.getRange(start, C.목적,     n, 1).getDisplayValues().flat();
     const viols  = sh.getRange(start, C.위반내용, n, 1).getDisplayValues().flat();
     const guides = sh.getRange(start, C.지도내용, n, 1).getDisplayValues().flat();
 
@@ -993,9 +992,7 @@ const _Style = {
     for (let i = 0; i < n; i++) {
       const d = dates[i];
       if (!(d instanceof Date)) continue;
-      const kd = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-      const nm = String(names[i] || '').trim();
-      if (`${kd}|${nm}` !== groupKey) continue;
+      if (_U.visitKey(d, names[i], purps[i]) !== groupKey) continue;
       if (gStart === -1) gStart = i;
       gEnd = i;
     }
@@ -1065,8 +1062,7 @@ const _Style = {
         const schedule = String(row[C_.COL.예약일정 - 1] || '').trim();
         if (!(dv instanceof Date) || isNaN(dv.getTime())) return null;
         if (schedule.includes('자율점검대상')) return null;
-        const dk  = `${dv.getFullYear()}-${dv.getMonth()}-${dv.getDate()}`;
-        const key = name ? `${dk}|${name}` : `${dk}|__noname__${serial}`;
+        const key = name ? _U.visitKey(dv, name, row[C_.COL.목적 - 1]) : `${_U.visitKey(dv, '', '')}__noname__${serial}`;
         if (!keyMap.has(key)) { serial++; keyMap.set(key, serial); }
         return keyMap.get(key);
       });
@@ -1787,8 +1783,12 @@ const _Sort = {
         if (pA.bldg !== pB.bldg) return pA.bldg - pB.bldg;
         if (pA.unit !== pB.unit) return pA.unit - pB.unit;
       }
-      return String(values[a][C.명칭 - 1] || '').trim()
+      const nameCmp = String(values[a][C.명칭 - 1] || '').trim()
               .localeCompare(String(values[b][C.명칭 - 1] || '').trim(), 'ko');
+      if (nameCmp !== 0) return nameCmp;
+      // 같은 날·같은 기관이라도 점검목적이 다르면 따로 묶이므로 섞이지 않게 모은다
+      return String(values[a][C.목적 - 1] || '').trim()
+              .localeCompare(String(values[b][C.목적 - 1] || '').trim(), 'ko');
     });
 
     const alreadySorted = indices.every((v, i) => v === i);
@@ -2014,19 +2014,24 @@ const _U = {
 
   hasSameGroupAbove(sh, row, dateVal, name) {
     if (!(dateVal instanceof Date) || isNaN(dateVal.getTime()) || !name) return false;
-    const dk    = `${dateVal.getFullYear()}-${dateVal.getMonth()}-${dateVal.getDate()}`;
     const start = C_.START_ROW;
     if (row <= start) return false;
+    const key   = _U.visitKey(dateVal, name, sh.getRange(row, C_.COL.목적).getDisplayValue());
     const n     = row - start;
     const dates = sh.getRange(start, C_.COL.시작일, n, 1).getValues().flat();
     const names = sh.getRange(start, C_.COL.명칭,   n, 1).getDisplayValues().flat();
+    const purps = sh.getRange(start, C_.COL.목적,   n, 1).getDisplayValues().flat();
     for (let i = 0; i < n; i++) {
       const d = dates[i];
       if (!(d instanceof Date) || isNaN(d.getTime())) continue;
-      if (`${d.getFullYear()}-${d.getMonth()}-${d.getDate()}` === dk &&
-          String(names[i] || '').trim() === name) return true;
+      if (_U.visitKey(d, names[i], purps[i]) === key) return true;
     }
     return false;
+  },
+
+  // 한 번의 점검 = 같은 날 + 같은 기관 + 같은 점검목적 (연번·묶음 배경색·아래칸 숨김의 기준)
+  visitKey(d, name, purpose) {
+    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}|${String(name || '').trim()}|${String(purpose || '').trim()}`;
   },
 
   extractDong(addr) {
@@ -2474,7 +2479,8 @@ function importSubmittedList() {
     const type = r[C.구분 - 1];
     if (!r[C.명칭 - 1] || type === '개인과외') return;
     const prev = rows[i - 1];
-    const isFirst = !prev || _Submit.key(prev[C.시작일 - 1], prev[C.명칭 - 1]) !== _Submit.key(r[C.시작일 - 1], r[C.명칭 - 1]);
+    const isFirst = !prev || _U.visitKey(prev[C.시작일 - 1], prev[C.명칭 - 1], prev[C.목적 - 1])
+                          !== _U.visitKey(r[C.시작일 - 1], r[C.명칭 - 1], r[C.목적 - 1]);
     targets.push({ row: first + i, name: r[C.명칭 - 1], type, date: r[C.시작일 - 1], bg: bgs[i], isFirst });
   });
   const fill = _fillByName(sh, targets);
@@ -2807,6 +2813,7 @@ function applyNaverLinksToAll() {
   const addrVals  = sh.getRange(start, C.주소,   n, 1).getDisplayValues();
   const gubunVals = sh.getRange(start, C.구분,   n, 1).getDisplayValues();
   const dateVals  = sh.getRange(start, C.시작일, n, 1).getValues();
+  const purpVals  = sh.getRange(start, C.목적,   n, 1).getDisplayValues();
   const bgColors  = sh.getRange(start, C.주소,   n, 1).getBackgrounds();
 
   const seenKeys = new Set();
@@ -2816,7 +2823,7 @@ function applyNaverLinksToAll() {
     const gubun = String(gubunVals[i][0] || '').trim();
     const d     = dateVals[i][0];
     const dk    = (d instanceof Date && !isNaN(d.getTime()) && name)
-      ? `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}|${name}` : null;
+      ? _U.visitKey(d, name, purpVals[i][0]) : null;
     const isFirst = !dk || !seenKeys.has(dk);
     if (dk) seenKeys.add(dk);
     if (!addr) return [SpreadsheetApp.newRichTextValue().setText('').build()];
