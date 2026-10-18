@@ -371,8 +371,9 @@ const _CombStat2 = {
         const cleaned = fine.replace(/[^0-9.]/g, '');
         const num     = parseFloat(cleaned);
         if (!isNaN(num) && num > 0) {
-          // 이미 천원 단위인지 확인 (값이 크면 원 단위로 간주)
-          fineAmt = num >= 10000 ? Math.round(num / 1000) : num;
+          // 대장 과태료 열은 만원 단위(50 = 50만원) → 천원으로 ×10
+          // (값이 크면 원 단위로 적힌 것으로 보고 ÷1000)
+          fineAmt = num >= 10000 ? Math.round(num / 1000) : Math.round(num * 10);
         }
       }
 
