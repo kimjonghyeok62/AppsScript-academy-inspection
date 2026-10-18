@@ -44,11 +44,16 @@ function buildCombinedStatSheet() {
   const main = _U.sh(C_.SHEET.MAIN);
   const weeks = _CombStat2.buildWeeks();
 
+  // ★ 대장은 시트를 지우거나 만들기 전에 한 번만 읽는다.
+  //   시트를 지우고 만든 직후 대장을 읽으면 '스프레드시트 서비스 타임아웃'으로
+  //   멈추고, 통계 시트만 빈 채로 남았다.
+  const raw = _CombStat2.readMain(main);
+
   // 1. 학원, 교습소 통계 시트 생성
-  _CombStat2.generateSheet(ss, main, weeks, '(공문)학원,교습소통계', ['학원', '교습소'], _CombStat2.VIOL_ITEMS);
+  _CombStat2.generateSheet(ss, raw, weeks, '(공문)학원,교습소통계', ['학원', '교습소'], _CombStat2.VIOL_ITEMS);
 
   // 2. 개인과외 통계 시트 생성 (항목 배열은 별도 정의된 VIOL_ITEMS_과외 사용)
-  _CombStat2.generateSheet(ss, main, weeks, '(공문)개인과외통계', ['개인과외'], _CombStat2.VIOL_ITEMS_과외);
+  _CombStat2.generateSheet(ss, raw, weeks, '(공문)개인과외통계', ['개인과외'], _CombStat2.VIOL_ITEMS_과외);
 
   SpreadsheetApp.flush();
   _U.toast('통계 시트 2종 생성 완료!', '✅', 5);
@@ -65,20 +70,30 @@ const _CombStat2 = {
   _currentCols: {}, // ★ 새로 추가: 현재 시트에 맞는 동적 열 정보 저장소
 
   // ── 1. 시트 생성기 함수 (유지) ──
-  generateSheet(ss, main, weeks, sheetName, targetTypes, violItemsDef) {
-    const existing = ss.getSheetByName(sheetName);
-    if (existing) ss.deleteSheet(existing);
-    
-    const statSh = ss.insertSheet(sheetName);
-
+  generateSheet(ss, raw, weeks, sheetName, targetTypes, violItemsDef) {
     this._currentTargets = targetTypes;
     this._currentViolItems = violItemsDef;
-    
-    // ★ 시트를 만들 때마다 열 위치를 새롭게 계산
-    this._currentCols = this.buildCols(); 
 
-    const rawData = this.collectData(main);
+    // ★ 시트를 만들 때마다 열 위치를 새롭게 계산
+    this._currentCols = this.buildCols();
+
+    const rawData = this.collectData(raw);
+
+    // ★ 있던 시트는 지우지 않고 비워서 다시 쓴다 (시트 삭제·생성이 타임아웃을 부른다)
+    const statSh = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+    this.resetSheet(statSh);
     this.writeSheet(statSh, rawData, weeks);
+  },
+
+  // 내용·서식·메모·병합·고정을 모두 풀어 빈 시트로 만든다
+  resetSheet(sh) {
+    sh.setFrozenRows(0);
+    sh.setFrozenColumns(0);
+    const all = sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns());
+    all.breakApart();
+    all.clearNote();
+    sh.clear();
+    SpreadsheetApp.flush();
   },
 
   // ── 2. ★ 기존 COLS를 삭제하고 대체한 동적 열 계산 함수 ★ ──
@@ -290,23 +305,34 @@ const _CombStat2 = {
     return map;
   },
 
-  // ─── 메인 시트 데이터 수집 ───────────────────────────────
-  collectData(sh) {
+  // ─── 메인 시트 한 번에 읽기 (학원·개인과외 두 통계가 같이 쓴다) ───
+  readMain(sh) {
     const C     = C_.COL;
     const start = C_.START_ROW;
     const last  = sh.getLastRow();
-    if (last < start) return [];
+    if (last < start) return null;
 
-    const n = last - start + 1;
+    const n    = last - start + 1;
+    const vals = sh.getRange(start, 1, n, C.비고).getValues();
+    const disp = sh.getRange(start, 1, n, C.비고).getDisplayValues();
+    const col  = (rows, c) => rows.map(r => r[c - 1]);
+    return {
+      n,
+      dateVals:  col(vals, C.시작일),
+      typeVals:  col(disp, C.구분),
+      nameVals:  col(disp, C.명칭),
+      violVals:  col(disp, C.위반내용),
+      guideVals: col(disp, C.지도내용),
+      sanctVals: col(disp, C.행정처분),
+      noteVals:  col(disp, C.비고),
+      fineVals:  col(disp, C.과태료),
+    };
+  },
 
-    const dateVals  = sh.getRange(start, C.시작일,   n, 1).getValues().flat();
-    const typeVals  = sh.getRange(start, C.구분,     n, 1).getDisplayValues().flat();
-    const nameVals  = sh.getRange(start, C.명칭,     n, 1).getDisplayValues().flat();
-    const violVals  = sh.getRange(start, C.위반내용, n, 1).getDisplayValues().flat();
-    const guideVals = sh.getRange(start, C.지도내용, n, 1).getDisplayValues().flat();
-    const sanctVals = sh.getRange(start, C.행정처분, n, 1).getDisplayValues().flat();
-    const noteVals  = sh.getRange(start, C.비고,     n, 1).getDisplayValues().flat();
-    const fineVals  = sh.getRange(start, C.과태료,   n, 1).getDisplayValues().flat();
+  // ─── 메인 시트 데이터 수집 ───────────────────────────────
+  collectData(raw) {
+    if (!raw) return [];
+    const { n, dateVals, typeVals, nameVals, violVals, guideVals, sanctVals, noteVals, fineVals } = raw;
 
     const codeMap       = _CombStat2.buildCodeToItemMap();
     const rows          = [];
@@ -437,6 +463,9 @@ const _CombStat2 = {
     const C2 = this._currentCols; // ★ 고정된 값 대신 알아서 맞춰진 동적 열 정보 사용
     const ITEM_CODES = this.getItemCodes(); 
     const TOTAL_COL  = C2.학원명;
+    if (sh.getMaxColumns() < TOTAL_COL) {
+      sh.insertColumnsAfter(sh.getMaxColumns(), TOTAL_COL - sh.getMaxColumns());
+    }
 
     // ★ 병합 전에 먼저 freeze 설정 — 반드시 병합보다 앞에 와야 함
     // 열 고정(setFrozenColumns)은 병합된 셀이 경계를 걸칠 경우 무조건 오류 발생
@@ -453,7 +482,11 @@ const _CombStat2 = {
     // ② 데이터 행 작성
     // ═══════════════════════════════════════════════════
     const monthGroups = _CombStat2.groupByMonth(weeks);
-    let   dataRow     = 6; // 6행부터 데이터
+    const FIRST_ROW   = 6; // 6행부터 데이터
+
+    // ★ 값·메모를 모아 두었다가 한 번에 쓴다 (행마다·칸마다 쓰면 호출이 수백 번)
+    const values = [], notes = [], marks = [];
+    const blankNotes = () => Array(TOTAL_COL).fill('');
 
     // 총계 누적
     const grandTotal = _CombStat2.emptyAgg(ITEM_CODES);
@@ -468,38 +501,28 @@ const _CombStat2 = {
         const stat = _CombStat2.aggregate(weekRows, ITEM_CODES);
 
         // 데이터 행 값 배열
-        const row = _CombStat2.buildRowValues(
+        values.push(_CombStat2.buildRowValues(
           '하남', `${month}`, `${week.weekNum}주차`, week.label,
           stat, C2, ITEM_CODES, TOTAL_COL
-        );
-        sh.getRange(dataRow, 1, 1, TOTAL_COL).setValues([row]);
+        ));
+        notes.push(_CombStat2.memoRow(stat, ITEM_CODES, C2, TOTAL_COL));
 
         // 오늘 주차 강조
-        if (week.isThisWeek) {
-          sh.getRange(dataRow, 1, 1, TOTAL_COL).setBackground('#FFFDE7');
-        }
-
-        // 메모 추가
-        _CombStat2.addMemos(sh, dataRow, stat, ITEM_CODES, C2);
+        if (week.isThisWeek) marks.push({ i: values.length - 1, bg: '#FFFDE7', bold: false });
 
         // 월별 누적
         _CombStat2.addAgg(monthAgg, stat, ITEM_CODES);
         // 총계 누적
         _CombStat2.addAgg(grandTotal, stat, ITEM_CODES);
-
-        dataRow++;
       }
 
       // 월별 소계 행
-      const mRow = _CombStat2.buildRowValues(
+      values.push(_CombStat2.buildRowValues(
         '하남', `${month}`, '계', '',
         monthAgg, C2, ITEM_CODES, TOTAL_COL
-      );
-      sh.getRange(dataRow, 1, 1, TOTAL_COL).setValues([mRow]);
-      sh.getRange(dataRow, 1, 1, TOTAL_COL)
-        .setBackground('#E3F2FD')
-        .setFontWeight('bold');
-      dataRow++;
+      ));
+      notes.push(blankNotes());
+      marks.push({ i: values.length - 1, bg: '#E3F2FD', bold: true });
     }
 
     // 총계 행 (학원명 생략 — 너무 길어지므로)
@@ -508,10 +531,16 @@ const _CombStat2 = {
       grandTotal, C2, ITEM_CODES, TOTAL_COL
     );
     totRow[C2.학원명 - 1] = '';  // ★ 총계 행 학원명 비움
-    sh.getRange(dataRow, 1, 1, TOTAL_COL).setValues([totRow]);
-    sh.getRange(dataRow, 1, 1, TOTAL_COL)
-      .setBackground('#BBDEFB')
-      .setFontWeight('bold');
+    values.push(totRow);
+    notes.push(blankNotes());
+    marks.push({ i: values.length - 1, bg: '#BBDEFB', bold: true });
+
+    sh.getRange(FIRST_ROW, 1, values.length, TOTAL_COL).setValues(values).setNotes(notes);
+    marks.forEach(m => {
+      const r = sh.getRange(FIRST_ROW + m.i, 1, 1, TOTAL_COL).setBackground(m.bg);
+      if (m.bold) r.setFontWeight('bold');
+    });
+    const dataRow = FIRST_ROW + values.length - 1;
 
     // ═══════════════════════════════════════════════════
     // ③ 서식 적용
@@ -720,12 +749,14 @@ const _CombStat2 = {
     return agg;
   },
 
-  // ─── 메모 추가 ───────────────────────────────────────────
-  addMemos(sh, rowIdx, stat, ITEM_CODES, C2) {
+  // ─── 한 행의 메모 (칸마다 문자열, 없으면 '') ─────────────────
+  memoRow(stat, ITEM_CODES, C2, TOTAL_COL) {
+    const row = Array(TOTAL_COL).fill('');
+
     ITEM_CODES.forEach((code, idx) => {
       const names = stat.namesByCode[code];
       if (names && names.length > 0) {
-        sh.getRange(rowIdx, C2.VIOL_START + idx).setNote(`[${code} 위반]\n${names.join('\n')}`);
+        row[C2.VIOL_START + idx - 1] = `[${code} 위반]\n${names.join('\n')}`;
       }
     });
 
@@ -738,14 +769,15 @@ const _CombStat2 = {
     sanctKeys.forEach(item => {
       const names = stat.namesBySanct[item.key];
       if (names && names.length > 0) {
-        sh.getRange(rowIdx, item.col).setNote(`[${item.key} 대상]\n${names.join('\n')}`);
+        row[item.col - 1] = `[${item.key} 대상]\n${names.join('\n')}`;
       }
     });
-    
+
     if (stat.fine > 0) {
       const fineNames = stat.namesBySanct['과태료처분'];
-      sh.getRange(rowIdx, C2.과태료금액).setNote(`[과태료 상세]\n${fineNames.join('\n')}`);
+      row[C2.과태료금액 - 1] = `[과태료 상세]\n${fineNames.join('\n')}`;
     }
+    return row;
   },
 
   groupByMonth(weeks) {
