@@ -23,7 +23,10 @@ const C_ = {
     점검자:   '드롭다운목록',
     DV:       '__DV__',
     DV목록:   '드롭다운목록',
+    과외:     '2026 지도점검(개인과외)',
   },
+  // 탭 이름이 바뀌어도 찾을 수 있게 gid 도 적어 둔다 (C_.SHEET 의 키와 같게)
+  SHEET_GID: { MAIN: 1946422008, 과외: 816422616 },
   START_ROW: 4,
   HEADER_ROW: 3,
   TAIL_ROWS: 5,
@@ -138,6 +141,14 @@ const C_ = {
     YEAR:  2026,   // 점검일이 '9.22' 처럼 연도 없이 적혀 있다
     COL:   { 연번: 1, 점검일: 2, 구분: 4, 명칭: 5, 목적: 6, 처분: 7, 위반내용: 8,
              과태료부과일: 9, 사전의견: 10, 처분일: 11, 과태료: 12 },
+  },
+
+  // 개인과외 지도점검 대장 — '2026 지도점검(개인과외)' 탭 (1행 머리글, 2행부터 자료)
+  // 이어지는 위반 행은 연번·이름이 비어 있다 (윗행과 같은 점검)
+  TUTOR: {
+    HEADER_ROW: 1,
+    COL: { 연번: 1, 점검일: 2, 성명: 4, 목적: 5, 처분: 6, 세부: 7,
+           의견알림: 8, 처분일: 10, 과태료: 11, 납부: 12 },
   },
 
   HIST: {
@@ -1991,7 +2002,10 @@ const _Cal = {
 const _U = {
 
   sh(name) {
-    const s = SpreadsheetApp.getActive().getSheetByName(name);
+    const ss  = SpreadsheetApp.getActive();
+    const key = Object.keys(C_.SHEET_GID).find(k => C_.SHEET[k] === name);
+    const s   = ss.getSheetByName(name)
+             || (key && ss.getSheets().find(x => x.getSheetId() === C_.SHEET_GID[key]));
     if (!s) throw new Error(`시트 없음: "${name}"`);
     return s;
   },
