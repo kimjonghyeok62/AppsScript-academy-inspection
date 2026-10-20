@@ -155,7 +155,7 @@ const _CombStat2 = {
   SANCT_KEYS: ['말소', '정지', '벌점', '지도', '과태료처분', '고발'],
   SANCT_RULES: {
     말소: /말소|폐지/,
-    정지: /정지|중지/,
+    정지: /(^|[^행])정지|중지/,   // 행정지도의 '정지'는 빼고
     벌점: /벌점|시정|경고/,
     지도: /지도/,
     고발: /고발|수사/,
@@ -684,7 +684,7 @@ const _CombStat2 = {
     const NC   = 13;
     const sh   = this.prepSheet(ss, sheetName, NC);
     const list = rows
-      .filter(r => (r.violCode || r.fineAmt > 0) && (r.fineAmt > 0 || /정지|중지|말소|폐지/.test(r.sanct)))
+      .filter(r => (r.violCode || r.fineAmt > 0) && (r.fineAmt > 0 || /(^|[^행])정지|중지|말소|폐지/.test(r.sanct)))
       .sort((a, b) => a.date - b.date);   // 같은 날은 대장 순서 그대로
 
     sh.getRange(1, 1).setValue(`2. 행정처분(정지, 말소 등), 과태료 부과 현황(${this.YEAR}년)`)
