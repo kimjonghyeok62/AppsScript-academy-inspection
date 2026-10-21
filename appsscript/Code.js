@@ -2412,6 +2412,8 @@ function _fillByName(sh, targets) {
 //  · 위반내용은 행정처분기준에서 가장 비슷한 항목을 고르되, 행정처분·과태료가
 //    제출용과 맞는 항목을 우선한다. 끝내 안 맞으면 제출용 값을 그대로 쓰고 팝업으로 알린다.
 //  · 옮긴 뒤 명칭 검색 → 재정렬·스타일 적용까지 이어서 한다.
+//  · 대장에 이미 있는 점검은 과태료부과일·사전의견청취일·처분일 중
+//    대장이 비어 있고 제출용에 날짜가 생긴 칸만 채운다 (대장 값은 덮어쓰지 않는다).
 function importSubmittedList() {
   const sh = _U.sh(C_.SHEET.MAIN);
   const ui = SpreadsheetApp.getUi();
@@ -2428,28 +2430,47 @@ function importSubmittedList() {
     if (have.keys.has(_Submit.key(r.date, r.name))) return;
     todo.push(r);
   });
+  const isNew = new Set(todo);
+  const upd   = _Submit.dateUpdates(sh, src.filter(r => r.date && !isNew.has(r)));
 
-  if (!todo.length) {
-    ui.alert('📥 불러오기', '새로 가져올 점검이 없습니다.' +
+  if (!todo.length && !upd.cells.length) {
+    ui.alert('📥 불러오기', '새로 가져올 점검도, 새로 채울 날짜도 없습니다.' +
+      (upd.conflicts.length ? `\n\n⚠️ 대장과 제출용 날짜가 다른 칸 (대장 값 유지):\n${upd.conflicts.join('\n')}` : '') +
       (badDate.length ? `\n\n점검일을 읽지 못한 행:\n${badDate.join('\n')}` : ''), ui.ButtonSet.OK);
     return;
   }
 
   const serials = [...new Set(todo.map(r => r.serial))];
-  const res = ui.alert(
-    '📥 지도점검목록(도교육청 제출용) 불러오기',
-    [
-      `제출용에만 있는 점검을 대장에 추가합니다.`,
-      ``,
+  const ask = [];
+  if (todo.length) {
+    ask.push(`제출용에만 있는 점검을 대장에 추가합니다.`, ``,
       `  • 연번 ${serials[0]} ~ ${serials[serials.length - 1]} (${serials.length}곳, ${todo.length}행)`,
-      `  • 추가한 뒤 명칭 검색 → 재정렬 및 스타일 적용까지 이어서 합니다.`,
-      ``,
-      `계속하시겠습니까?`,
-    ].join('\n'),
-    ui.ButtonSet.YES_NO
-  );
+      `  • 추가한 뒤 명칭 검색 → 재정렬 및 스타일 적용까지 이어서 합니다.`, ``);
+  }
+  if (upd.cells.length) {
+    ask.push(`대장에 있는 점검의 비어 있는 날짜를 제출용 값으로 채웁니다.`, ``,
+      `  • 과태료부과일·사전의견청취일·처분일 ${upd.cells.length}칸 (${upd.visits}곳)`, ``);
+  }
+  ask.push(`계속하시겠습니까?`);
+  const res = ui.alert('📥 지도점검목록(도교육청 제출용) 불러오기', ask.join('\n'), ui.ButtonSet.YES_NO);
   if (res !== ui.Button.YES) {
     _U.toast('취소되었습니다.', '❌', 3);
+    return;
+  }
+
+  // 0) 날짜 채우기 — 행을 끼워 넣기 전에 (행 번호가 바뀌기 전)
+  upd.cells.forEach(c => sh.getRange(c.row, c.col).setValue(c.value));
+  SpreadsheetApp.flush();
+  const updLines = upd.cells.length
+    ? ['', `📅 날짜 채움 (${upd.cells.length}칸, ${upd.visits}곳)`, ...upd.lines] : [];
+  const conflictLines = upd.conflicts.length
+    ? ['', `⚠️ 대장과 제출용 날짜가 다른 칸 (${upd.conflicts.length}칸) — 대장 값을 그대로 두었습니다.`, ...upd.conflicts] : [];
+  const badLines = badDate.length
+    ? ['', `⚠️ 점검일을 읽지 못해 건너뜀 (${badDate.length}행)`, ...badDate] : [];
+
+  if (!todo.length) {
+    ui.alert('📥 불러오기 완료', ['새로 가져올 점검은 없습니다.', ...updLines, ...conflictLines, ...badLines].join('\n'),
+      ui.ButtonSet.OK);
     return;
   }
 
@@ -2514,9 +2535,7 @@ function importSubmittedList() {
   if (failNames.length) {
     lines.push('', `⚠️ 명칭 검색 실패 (${failNames.length}곳) — 마스터에서 명칭을 찾지 못했습니다.`, ...failNames);
   }
-  if (badDate.length) {
-    lines.push('', `⚠️ 점검일을 읽지 못해 건너뜀 (${badDate.length}행)`, ...badDate);
-  }
+  lines.push(...updLines, ...conflictLines, ...badLines);
   ui.alert('📥 불러오기 완료', lines.join('\n'), ui.ButtonSet.OK);
 }
 
@@ -2570,6 +2589,116 @@ const _Submit = {
       if (d instanceof Date && !isNaN(d.getTime()) && names[i]) keys.add(_Submit.key(d, names[i]));
     });
     return { serials, keys };
+  },
+
+  // 대장에 이미 있는 점검의 빈 날짜 칸(과태료부과일·사전의견·처분일)에 넣을 값
+  //  · 점검일+명칭이 같은 점검끼리 맞춘다. 없으면 같은 점검일 중 명칭이 가장 비슷한 점검.
+  //  · 한 점검이 여러 행이면 위반내용이 비슷한 행끼리 짝짓는다 (제출용이 한 행이면 대장 모든 행에).
+  //  · 대장에 다른 값이 이미 있으면 덮어쓰지 않고 conflicts 로 알린다.
+  //  → { cells: [{ row, col, value }], visits, lines, conflicts }
+  dateUpdates(sh, src) {
+    const C   = C_.COL;
+    const out = { cells: [], visits: 0, lines: [], conflicts: [] };
+    const fields = [
+      ['feeDate',      C.과태료부과일, '과태료부과일'],
+      ['hearing',      C.사전의견,     '사전의견청취일'],
+      ['sanctionDate', C.처분일,       '처분일'],
+    ];
+    const hasDate = r => fields.some(([k]) => _Submit.toDate(r[k]));
+    if (!src.some(hasDate)) return out;
+
+    const start = C_.START_ROW;
+    const last  = _U.lastDataRow(sh);
+    if (last < start) return out;
+    const n    = last - start + 1;
+    const vals = sh.getRange(start, 1, n, C.처분일).getValues();
+    const disp = sh.getRange(start, 1, n, C.처분일).getDisplayValues();
+
+    // 대장: 점검일+명칭 → [행 index]
+    const led = new Map();
+    vals.forEach((v, i) => {
+      const d = v[C.시작일 - 1], name = disp[i][C.명칭 - 1];
+      if (!(d instanceof Date) || isNaN(d.getTime()) || !name) return;
+      const k = _Submit.key(d, name);
+      if (!led.has(k)) led.set(k, []);
+      led.get(k).push(i);
+    });
+    const ledKey = r => {
+      const k = _Submit.key(r.date, r.name);
+      if (led.has(k)) return k;
+      const day = _Submit.key(r.date, '');
+      const p   = _U.norm(r.name);
+      let best = null, bestScore = 0.5;   // 명칭 표기만 조금 다른 옛 행
+      led.forEach((_, lk) => {
+        if (!lk.startsWith(day)) return;
+        const s = _Submit._similar(p, lk.slice(day.length));
+        if (s > bestScore) { best = lk; bestScore = s; }
+      });
+      return best;
+    };
+
+    // 제출용 행을 대장 점검별로 묶는다
+    const groups = new Map();
+    src.forEach(r => {
+      const k = ledKey(r);
+      if (!k) return;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(r);
+    });
+
+    const sameDay = (a, b) => a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+    const md    = d => `${d.getMonth() + 1}.${d.getDate()}`;
+    const lines = new Set(), conflicts = new Set();
+
+    groups.forEach((subs, k) => {
+      if (!subs.some(hasDate)) return;
+      const rows = led.get(k);
+
+      // [제출용 행, 대장 행 index] 짝
+      let pairs;
+      if (subs.length === 1) {
+        pairs = rows.map(i => [subs[0], i]);
+      } else {
+        const cand = [];
+        subs.forEach((r, a) => rows.forEach((i, b) => cand.push({
+          r, i, d: Math.abs(a - b),
+          s: _Submit._similar(_Submit._prep(r.violation), _Submit._prep(disp[i][C.위반내용 - 1])),
+        })));
+        cand.sort((x, y) => y.s - x.s || x.d - y.d);
+        const usedR = new Set(), usedI = new Set();
+        pairs = [];
+        cand.forEach(c => {
+          if (usedR.has(c.r) || usedI.has(c.i)) return;
+          usedR.add(c.r); usedI.add(c.i);
+          pairs.push([c.r, c.i]);
+        });
+      }
+
+      let touched = false;
+      pairs.forEach(([r, i]) => {
+        fields.forEach(([key, col, label]) => {
+          const d = _Submit.toDate(r[key]);
+          if (!d) return;
+          const where  = `${r.serial} ${r.name} ${label}`;
+          const curTxt = String(disp[i][col - 1] || '').trim();
+          if (!curTxt) {
+            out.cells.push({ row: start + i, col, value: d });
+            lines.add(`${where} ${md(d)}`);
+            touched = true;
+            return;
+          }
+          const cur  = vals[i][col - 1];
+          const curD = cur instanceof Date ? cur : (_Submit.toDate(curTxt) || _Submit.parseDay(curTxt));
+          if (!curD || !sameDay(curD, d)) conflicts.add(`${where}: 대장 '${curTxt}' / 제출용 '${r[key]}'`);
+        });
+      });
+      if (touched) out.visits++;
+    });
+
+    out.lines     = [...lines];
+    out.conflicts = [...conflicts];
+    return out;
   },
 
   key(d, name) {
