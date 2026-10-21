@@ -196,6 +196,11 @@ const C_ = {
   DONE_KEYWORD: '이상없음',
   DONE_NOTE:    '완료',
 
+  // 나이스 입력 도우미 — 나이스 '비고' 칸에 적는 점검목적 (없으면 대장 목적 그대로)
+  NEIS: {
+    비고: { 교습시간점검: '교습시간 위반 점검' },
+  },
+
   HDR_NAME: {
     비고: '비고',
     EID:  '캘린더EventId',
@@ -618,6 +623,7 @@ function onOpen() {
     .addItem('📅 캘린더 일정 반영', 'syncCalendar')
     .addItem('📊 학원,교습소,개인과외 통계 생성', 'buildCombinedStatSheet')
     .addItem('📥 지도점검목록(도교육청 제출용) 불러오기', 'importSubmittedList')
+    .addItem('🧾 나이스 입력 도우미', 'openNeisHelper')
     .addSeparator()
     .addItem('🔄 점검이력 인덱스 갱신', 'rebuildHistoryIndex')
     .addItem('📞 SNS게시점검 연락처 채우기', 'fillSnsContacts')
@@ -2823,6 +2829,238 @@ const _Submit = {
       if (dates[i] instanceof Date && !isNaN(dates[i].getTime())) return start + i;
     }
     return start - 1;
+  },
+};
+
+
+// ═══════════════════════════════════════════════════════
+// ★ 공개 함수 — 나이스 입력 도우미 (사이드바)
+// ═══════════════════════════════════════════════════════
+// V열(나이스입력)이 비어 있는 지난 점검을 나이스에 옮겨 적기 쉽게 보여 준다.
+//  · 이상없음 점검은 구분·점검일·비고(점검목적)·점검자가 같은 곳끼리 묶는다
+//    → 나이스 '지도점검 위반내역 일괄등록'에서 한 번에 등록
+//  · 위반이 있는 점검은 한 곳씩 (위반내역 + 행정처분·과태료)
+//  · 신고번호는 나이스 대상추가 목록과 같은 순서로 늘어놓는다 (Ctrl+F 로 위에서 아래로 찾기)
+//  · [입력 완료]를 누르면 그 점검의 모든 행 V열에 1 을 적는다
+function openNeisHelper() {
+  SpreadsheetApp.getUi().showSidebar(
+    HtmlService.createHtmlOutput(_Neis.html()).setTitle('🧾 나이스 입력 도우미'));
+}
+
+// 사이드바에서 부른다 (google.script.run 은 _ 로 끝나는 함수를 못 부른다)
+function neisList()         { return _Neis.list(); }
+function neisMarkDone(keys) { return _Neis.markDone(keys); }
+
+
+// ═══════════════════════════════════════════════════════
+// 내부 모듈 — 나이스 입력 도우미 (_Neis)
+// ═══════════════════════════════════════════════════════
+const _Neis = {
+
+  // → { batches: [...], singles: [...] }  (점검일 오래된 순)
+  list() {
+    const sh    = _U.sh(C_.SHEET.MAIN);
+    const C     = C_.COL;
+    const start = C_.START_ROW;
+    const last  = _U.lastDataRow(sh);
+    if (last < start) return { batches: [], singles: [] };
+    const n    = last - start + 1;
+    const vals = sh.getRange(start, 1, n, C.나이스입력).getValues();
+    const disp = sh.getRange(start, 1, n, C.나이스입력).getDisplayValues();
+    const tod  = new Date();
+    const today = new Date(tod.getFullYear(), tod.getMonth(), tod.getDate() + 1);
+
+    // 한 점검 = 연번이 같은 이어진 행
+    const visits = [];
+    let cur = null;
+    vals.forEach((v, i) => {
+      const d    = disp[i];
+      const name = d[C.명칭 - 1].trim();
+      const date = v[C.시작일 - 1];
+      if (!name || !(date instanceof Date) || isNaN(date.getTime())) { cur = null; return; }
+      const key = _Neis.key(d[C.연번 - 1], name, date);
+      if (!cur || cur.key !== key) { cur = { key, date, rows: [] }; visits.push(cur); }
+      cur.rows.push({ v, d });
+    });
+
+    const batches = new Map(), singles = [];
+    visits.forEach(vt => {
+      const f = vt.rows[0].d;
+      if (vt.date >= today) return;                                       // 아직 안 한 점검
+      if (vt.rows.some(r => r.d[C.나이스입력 - 1].trim())) return;          // 이미 입력함
+      const viols = vt.rows.map(r => r.d[C.위반내용 - 1].trim());
+      if (!viols.some(Boolean)) return;                                   // 결과를 아직 안 적음
+
+      const type    = f[C.구분 - 1].trim();
+      const date    = Utilities.formatDate(vt.date, C_.TZ, 'yyyy-MM-dd');
+      const purpose = f[C.목적 - 1].trim();
+      const base = {
+        type, date, purpose,
+        note:      C_.NEIS.비고[purpose] || purpose,
+        inspector: _Neis.inspector(f[C.점검자 - 1]),
+      };
+      const place = { reg: f[C.등록번호 - 1].trim(), name: f[C.명칭 - 1].trim(), key: vt.key };
+
+      if (viols.every(x => x === C_.DONE_KEYWORD)) {
+        const bk = [base.type, base.date, base.note, base.inspector].join('|');
+        if (!batches.has(bk)) batches.set(bk, Object.assign({ places: [] }, base));
+        batches.get(bk).places.push(place);
+        return;
+      }
+
+      const won = s => { const m = String(s).replace(/,/g, '').match(/\d+(\.\d+)?/); return m ? Math.round(Number(m[0]) * 10000) : 0; };
+      const day = v => v instanceof Date ? Utilities.formatDate(v, C_.TZ, 'yyyy-MM-dd') : String(v || '').trim();
+      singles.push(Object.assign({ place }, base, {
+        rows: vt.rows.filter(r => r.d[C.위반내용 - 1].trim() && r.d[C.위반내용 - 1].trim() !== C_.DONE_KEYWORD)
+          .map(r => ({
+            item:         r.d[C.위반내용 - 1].trim(),
+            itemName:     r.d[C.위반내용 - 1].trim().replace(/^\d+(-\d+)*\s*/, ''),
+            guide:        r.d[C.지도내용 - 1].trim(),
+            sanction:     r.d[C.행정처분 - 1].trim(),
+            fine:         r.d[C.과태료 - 1].trim(),
+            fineWon:      won(r.d[C.과태료 - 1]),
+            feeDate:      day(r.v[C.과태료부과일 - 1]),
+            hearing:      day(r.v[C.사전의견 - 1]),
+            sanctionDate: day(r.v[C.처분일 - 1]),
+          })),
+      }));
+    });
+
+    const regCmp = (a, b) => String(a.reg).localeCompare(String(b.reg), 'ko', { numeric: true });
+    const byDate = (a, b) => a.date.localeCompare(b.date) || a.type.localeCompare(b.type, 'ko');
+    const out = [...batches.values()];
+    out.forEach(b => b.places.sort(regCmp));
+    return { batches: out.sort(byDate), singles: singles.sort(byDate) };
+  },
+
+  // 점검 하나를 가리키는 키 (행 번호는 정렬하면 바뀌므로 쓰지 않는다)
+  key(serial, name, date) {
+    return [String(serial).trim(), _U.norm(name), Utilities.formatDate(date, C_.TZ, 'yyyyMMdd')].join('|');
+  },
+
+  // '김종혁,\n서혜지' → '김종혁, 서혜지'
+  inspector(s) {
+    return String(s || '').replace(/\s*\n\s*/g, ' ').replace(/\s*,\s*/g, ', ').trim();
+  },
+
+  // keys 에 해당하는 점검의 모든 행 V열에 1 → 적은 행 수
+  markDone(keys) {
+    const want  = new Set(keys);
+    const sh    = _U.sh(C_.SHEET.MAIN);
+    const C     = C_.COL;
+    const start = C_.START_ROW;
+    const last  = _U.lastDataRow(sh);
+    if (last < start || !want.size) return 0;
+    const n      = last - start + 1;
+    const serial = sh.getRange(start, C.연번,   n, 1).getDisplayValues().flat();
+    const names  = sh.getRange(start, C.명칭,   n, 1).getDisplayValues().flat();
+    const dates  = sh.getRange(start, C.시작일, n, 1).getValues().flat();
+    const rows   = [];
+    names.forEach((name, i) => {
+      const d = dates[i];
+      if (!name.trim() || !(d instanceof Date) || isNaN(d.getTime())) return;
+      if (want.has(_Neis.key(serial[i], name.trim(), d))) rows.push(start + i);
+    });
+    if (rows.length) sh.getRangeList(rows.map(r => sh.getRange(r, C.나이스입력).getA1Notation())).setValue(1);
+    return rows.length;
+  },
+
+  html() {
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><base target="_top"><style>
+*{box-sizing:border-box}
+body{font-family:'Malgun Gothic',sans-serif;font-size:12px;margin:0;padding:8px;color:#222}
+.top{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px}
+.top button,.tab{border:1px solid #ccc;background:#fff;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:12px}
+.tab.on{background:#1a73e8;color:#fff;border-color:#1a73e8}
+.sum{color:#666;margin:4px 0 8px}
+.card{border:1px solid #dadce0;border-radius:6px;padding:8px;margin-bottom:10px}
+.hd{font-weight:bold;margin-bottom:6px;line-height:1.5}
+.ty{display:inline-block;background:#e8f0fe;color:#1a73e8;border-radius:3px;padding:0 4px;margin-right:4px}
+.sec{color:#888;font-size:11px;margin:8px 0 3px}
+table{border-collapse:collapse;width:100%}
+td{padding:2px 3px;vertical-align:top}
+td.k{color:#666;white-space:nowrap;width:1%}
+.v{cursor:pointer;border-radius:3px;padding:1px 3px;display:inline-block;word-break:break-all}
+.v:hover{background:#fef7e0}
+.v.ok{background:#ceead6}
+.reg{font-family:Consolas,monospace;font-weight:bold}
+.done{width:100%;margin-top:8px;padding:6px;border:none;border-radius:5px;background:#188038;color:#fff;cursor:pointer;font-size:12px}
+.done.ask{background:#d93025}
+.sm{border:1px solid #ccc;background:#fff;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:11px}
+.warn{color:#d93025}
+</style></head><body>
+<div class="top">
+  <button class="tab on" data-t="">전체</button><button class="tab" data-t="학원">학원</button>
+  <button class="tab" data-t="교습소">교습소</button><button class="tab" data-t="개인과외">개인과외</button>
+  <button id="rf">🔄</button>
+</div>
+<div class="top"><button class="tab on" data-m="b">일괄등록 (이상없음)</button><button class="tab" data-m="s">위반 있음 (한 곳씩)</button></div>
+<div class="sum" id="sum">불러오는 중…</div>
+<div id="list"></div>
+<script>
+let D={batches:[],singles:[]},T='',M='b';
+const $=s=>document.querySelector(s);
+const el=(tag,cls,txt)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(txt!=null)e.textContent=txt;return e;};
+function copy(t,e){
+  const a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();
+  let ok=false;try{ok=document.execCommand('copy');}catch(_){}
+  a.remove();if(!ok&&navigator.clipboard)navigator.clipboard.writeText(t).catch(()=>{});
+  if(e){e.classList.add('ok');setTimeout(()=>e.classList.remove('ok'),700);}
+}
+// 누르면 복사되는 값
+const val=(t,cls)=>{const e=el('span','v'+(cls?' '+cls:''),t||'-');if(t)e.onclick=()=>copy(t,e);e.title='누르면 복사';return e;};
+function rows(tb,pairs){pairs.forEach(([k,v])=>{const tr=el('tr');tr.appendChild(el('td','k',k));const td=el('td');td.appendChild(typeof v==='string'?val(v):v);tr.appendChild(td);tb.appendChild(tr);});}
+function head(c,x,extra){const h=el('div','hd');h.appendChild(el('span','ty',x.type));h.appendChild(document.createTextNode(x.date+' · '+(x.purpose||'-')+' · '+(x.inspector||'점검자 없음')+(extra||'')));c.appendChild(h);}
+function doneBtn(c,keys){
+  const b=el('button','done','✅ 나이스 입력 완료 → V열에 1');
+  b.onclick=()=>{
+    if(!b.classList.contains('ask')){b.classList.add('ask');b.textContent='한 번 더 누르면 V열에 1을 적습니다';setTimeout(()=>{b.classList.remove('ask');b.textContent='✅ 나이스 입력 완료 → V열에 1';},4000);return;}
+    b.disabled=true;b.textContent='적는 중…';
+    google.script.run.withSuccessHandler(n=>{c.remove();D.batches=D.batches.filter(x=>!x.places.some(p=>keys.includes(p.key)));D.singles=D.singles.filter(x=>!keys.includes(x.place.key));sum();})
+      .withFailureHandler(e=>{b.disabled=false;b.textContent='오류: '+e.message;}).neisMarkDone(keys);
+  };
+  c.appendChild(b);
+}
+function batchCard(x){
+  const c=el('div','card');head(c,x,'  ('+x.places.length+'곳)');
+  c.appendChild(el('div','sec','대상추가에서 체크할 곳 (나이스 목록 순서)'));
+  const tb=el('table');
+  x.places.forEach(p=>{const tr=el('tr');const a=el('td','k');a.appendChild(p.reg?val(p.reg,'reg'):el('span','warn','번호 없음'));tr.appendChild(a);const b=el('td');b.appendChild(val(p.name));tr.appendChild(b);tb.appendChild(tr);});
+  c.appendChild(tb);
+  const all=el('button','sm','신고번호 모두 복사');all.onclick=()=>copy(x.places.map(p=>p.reg).filter(Boolean).join('\\n'),all);c.appendChild(all);
+  c.appendChild(el('div','sec','아래 표에 한 행 입력'));
+  const t2=el('table');rows(t2,[['점검일',x.date],['위반구분','없음'],['위반사항','없음'],['위반내역','없음'],['비고',x.note],['차수','해당없음'],['벌점','0'],['점검자',x.inspector]]);
+  c.appendChild(t2);doneBtn(c,x.places.map(p=>p.key));return c;
+}
+function singleCard(x){
+  const c=el('div','card');head(c,x);
+  const tb=el('table');rows(tb,[['신고번호',x.place.reg],['명칭',x.place.name]]);c.appendChild(tb);
+  x.rows.forEach((r,i)=>{
+    c.appendChild(el('div','sec','① 위반내역등록 — '+(i+1)+'행'));
+    const t=el('table');
+    rows(t,[['점검일',x.date],['위반구분·사항',val(r.item)],['위반내역',r.itemName],['지도내용',r.guide],['비고',x.note],['차수','1차 / 2차 / 3차 중 선택'],['점검자',x.inspector]]);
+    c.appendChild(t);
+    if(r.sanction&&r.sanction!=='없음'||r.sanctionDate){c.appendChild(el('div','sec','② 행정처분등록'));const t2=el('table');rows(t2,[['행정처분',r.sanction],['행정처분일',r.sanctionDate],['사전의견청취',r.hearing]]);c.appendChild(t2);}
+    if(r.fineWon||r.feeDate){c.appendChild(el('div','sec','③ 과태료 관리'));const t3=el('table');rows(t3,[['과태료(원)',r.fineWon?String(r.fineWon):''],['과태료(대장)',r.fine],['처분 통지일',r.feeDate]]);c.appendChild(t3);}
+  });
+  doneBtn(c,[x.place.key]);return c;
+}
+function sum(){
+  const bs=D.batches.filter(x=>!T||x.type===T),ss=D.singles.filter(x=>!T||x.type===T);
+  $('#sum').textContent='일괄등록 '+bs.length+'묶음 ('+bs.reduce((a,x)=>a+x.places.length,0)+'곳) · 위반 있음 '+ss.length+'곳';
+  return {bs,ss};
+}
+function render(){
+  const {bs,ss}=sum(),L=$('#list');L.innerHTML='';
+  const xs=M==='b'?bs:ss;
+  if(!xs.length){L.appendChild(el('div','sum','입력할 점검이 없습니다.'));return;}
+  xs.forEach(x=>L.appendChild(M==='b'?batchCard(x):singleCard(x)));
+}
+function load(){$('#sum').textContent='불러오는 중…';google.script.run.withSuccessHandler(d=>{D=d;render();}).withFailureHandler(e=>{$('#sum').textContent='오류: '+e.message;}).neisList();}
+document.querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>{T=b.dataset.t;document.querySelectorAll('[data-t]').forEach(x=>x.classList.toggle('on',x===b));render();});
+document.querySelectorAll('[data-m]').forEach(b=>b.onclick=()=>{M=b.dataset.m;document.querySelectorAll('[data-m]').forEach(x=>x.classList.toggle('on',x===b));render();});
+$('#rf').onclick=load;load();
+</script></body></html>`;
   },
 };
 
