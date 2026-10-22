@@ -135,7 +135,7 @@ const C_ = {
 
   // 지도점검목록(도교육청 제출용) — '학원, 교습소' 탭
   SUBMIT: {
-    SS_ID: '1DMxJbfjCz0KK7cH221gyhwSPxcQps073X4WsLtXsIvM',
+    SS_ID: '1eTA0m5exRSKUffoZ1dLitdK8yXHybauqi_PHhaC31co',
     GID:   0,
     SHEET: '학원, 교습소',
     YEAR:  2026,   // 점검일이 '9.22' 처럼 연도 없이 적혀 있다
