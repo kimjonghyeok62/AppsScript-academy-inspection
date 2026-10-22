@@ -1,10 +1,10 @@
-// 1. 스프레드시트를 열 때 상단 메뉴 1개에 하위 항목 2개를 만듭니다.
+// 1. 스프레드시트를 열 때 상단 메뉴 1개에 하위 항목 3개를 만듭니다.
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('🚀 업무 자동화')
-    .addItem('1. 등록신고번호 가져오기', 'fillRegistrationNumbers') // 첫 번째 단추
-    .addItem('2. 한글 표 복사용 만들기', 'createHangulFormat')      // 두 번째 단추 (새로 추가)
-    .addItem('3. 공문 통계 생성', 'buildOfficialStats')             // 세 번째 단추 (공문통계.js)
+    .addItem('1. 공문 통계 생성', 'buildOfficialStats')                        // 첫 번째 단추 (공문통계.js)
+    .addItem('2. 교습시간 위반점검 - 등록번호 가져오기', 'fillRegistrationNumbers') // 두 번째 단추
+    .addItem('3. 교습시간 위반점검 - 서식(표) 만들기', 'createHangulFormat')      // 세 번째 단추
     .addToUi();
 }
 
